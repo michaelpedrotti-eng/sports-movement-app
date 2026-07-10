@@ -1,0 +1,13 @@
+{
+  "name": "sports-movement-app",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "latest",
+    "dotenv": "^16.0.0",
+    "express": "^4.18.0"
+  }
+}

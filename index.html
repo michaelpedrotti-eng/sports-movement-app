@@ -1,0 +1,903 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Football Coaching Analysis</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0d0d12;
+      color: #e2e2e8;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 32px 16px 80px;
+      gap: 20px;
+    }
+
+    /* ── Header ── */
+    header { text-align: center; }
+    header h1 { font-size: 1.4rem; font-weight: 700; letter-spacing: -0.02em; color: #f0f0f5; }
+    header p { margin-top: 6px; font-size: 0.82rem; color: #555; }
+
+    /* ── Mode Selector ── */
+    .mode-selector-wrap {
+      width: 100%;
+      max-width: 560px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .mode-selector-label {
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #444;
+      padding: 0 2px;
+    }
+    .mode-selector {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      background: #16161e;
+      border: 1px solid #22222e;
+      border-radius: 14px;
+      padding: 6px;
+    }
+    .mode-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 5px;
+      padding: 16px 18px;
+      border-radius: 9px;
+      border: none;
+      cursor: pointer;
+      transition: background 0.2s, box-shadow 0.2s;
+      background: transparent;
+      text-align: left;
+      white-space: normal;
+      min-width: 0;
+    }
+    .mode-btn:hover:not(.active) { background: #1c1c28; }
+    .mode-btn.active {
+      background: #4f7cff;
+      box-shadow: 0 2px 12px rgba(79,124,255,0.35);
+    }
+    .mode-btn-icon {
+      font-size: 1.2rem;
+      line-height: 1;
+    }
+    .mode-btn-title {
+      font-size: 0.78rem;
+      font-weight: 800;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: #555;
+      transition: color 0.2s;
+    }
+    .mode-btn.active .mode-btn-title { color: #fff; }
+    .mode-btn-desc {
+      font-size: 0.7rem;
+      color: #3a3a52;
+      line-height: 1.4;
+      transition: color 0.2s;
+    }
+    .mode-btn.active .mode-btn-desc { color: rgba(255,255,255,0.65); }
+
+    /* ── Upload ── */
+    #uploadArea {
+      border: 2px dashed #2e2e3a;
+      border-radius: 14px;
+      padding: 40px 32px;
+      text-align: center;
+      cursor: pointer;
+      width: 100%;
+      max-width: 560px;
+      transition: border-color 0.18s, background 0.18s;
+      user-select: none;
+    }
+    #uploadArea:hover, #uploadArea.drag-over { border-color: #4f7cff; background: rgba(79,124,255,0.06); }
+    #uploadArea .icon { font-size: 2rem; margin-bottom: 12px; }
+    #uploadArea .label { font-size: 0.88rem; color: #aaa; }
+    #uploadArea .label strong { color: #e2e2e8; }
+    #uploadArea .hint { margin-top: 7px; font-size: 0.73rem; color: #444; }
+    #fileInput { display: none; }
+
+    /* ── Status ── */
+    #statusBar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 16px;
+      background: #16161e;
+      border: 1px solid #22222e;
+      border-radius: 8px;
+      font-size: 0.78rem;
+      color: #888;
+      width: 100%;
+      max-width: 560px;
+    }
+    .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: #444; }
+    .dot.loading { background: #f59e0b; animation: blink 1.1s ease-in-out infinite; }
+    .dot.ready   { background: #22c55e; }
+    .dot.active  { background: #4f7cff; }
+    .dot.error   { background: #ef4444; }
+    @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+    #fpsBadge { margin-left: auto; font-variant-numeric: tabular-nums; color: #555; }
+
+    /* ── Video ── */
+    #videoWrap { display: none; flex-direction: column; align-items: center; width: 100%; max-width: 900px; gap: 12px; }
+    #videoWrap.visible { display: flex; }
+    #outputCanvas { width: 100%; border-radius: 10px; background: #000; display: block; }
+    #video { display: none; }
+
+    .seek-row { display: flex; align-items: center; gap: 10px; width: 100%; }
+    #seekBar {
+      flex: 1; height: 4px; -webkit-appearance: none; appearance: none;
+      background: #2a2a38; border-radius: 2px; outline: none; cursor: pointer;
+    }
+    #seekBar::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #4f7cff; cursor: pointer; }
+    #timeDisplay { font-size: 0.75rem; color: #666; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+    .controls { display: flex; align-items: center; gap: 10px; width: 100%; flex-wrap: wrap; }
+
+    button {
+      padding: 7px 18px; border-radius: 7px; border: none; cursor: pointer;
+      font-size: 0.82rem; font-weight: 500; transition: background 0.15s, opacity 0.15s; white-space: nowrap;
+    }
+    button:disabled { opacity: 0.4; cursor: default; }
+    .btn-primary { background: #4f7cff; color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: #3a68f0; }
+    .btn-ghost { background: #1e1e2b; color: #bbb; border: 1px solid #2a2a38; }
+    .btn-ghost:hover:not(:disabled) { background: #26263a; }
+
+    .toggle-label { display: flex; align-items: center; gap: 7px; font-size: 0.8rem; color: #777; cursor: pointer; white-space: nowrap; }
+    .toggle-label input[type="checkbox"] { accent-color: #4f7cff; cursor: pointer; }
+
+    select {
+      background: #1e1e2b; color: #bbb; border: 1px solid #2a2a38;
+      border-radius: 7px; padding: 7px 10px; font-size: 0.82rem; cursor: pointer; outline: none;
+    }
+    select:hover { border-color: #4f7cff; }
+
+    /* ── Analysis section ── */
+    #analysisSection {
+      display: none;
+      flex-direction: column;
+      width: 100%;
+      max-width: 900px;
+      gap: 14px;
+    }
+
+    .analysis-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding-top: 8px;
+    }
+    .analysis-header h2 { font-size: 1rem; font-weight: 600; color: #f0f0f5; }
+
+    .analysis-mode-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 0.68rem;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .analysis-mode-badge.drill   { background: rgba(79,124,255,0.15); color: #7b9fff; border: 1px solid rgba(79,124,255,0.3); }
+    .analysis-mode-badge.movement { background: rgba(34,197,94,0.12); color: #5edb8a; border: 1px solid rgba(34,197,94,0.25); }
+
+    .context-row input {
+      width: 100%;
+      background: #16161e;
+      border: 1px solid #22222e;
+      border-radius: 8px;
+      padding: 10px 14px;
+      color: #e2e2e8;
+      font-size: 0.82rem;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .context-row input:focus { border-color: #4f7cff; }
+    .context-row input::placeholder { color: #333; }
+
+    /* ── Spinner ── */
+    .analyzing {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 40px 28px;
+      color: #555;
+      font-size: 0.85rem;
+      background: #16161e;
+      border: 1px solid #22222e;
+      border-radius: 12px;
+    }
+    .analyzing-spinner {
+      width: 16px; height: 16px;
+      border: 2px solid #2a2a38;
+      border-top-color: #4f7cff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      flex-shrink: 0;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Report cards ── */
+    #reportSection {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .report-error {
+      padding: 24px;
+      color: #f87171;
+      font-size: 0.85rem;
+      background: #16161e;
+      border: 1px solid #22222e;
+      border-radius: 12px;
+    }
+
+    /* Aliveness hero card */
+    .aliveness-card {
+      background: #16161e;
+      border: 1px solid #22222e;
+      border-radius: 14px;
+      overflow: hidden;
+    }
+    .aliveness-card-inner {
+      display: flex;
+      align-items: stretch;
+      min-height: 160px;
+    }
+    .aliveness-score-col {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 32px 40px;
+      min-width: 180px;
+      border-right: 1px solid #22222e;
+      background: #111118;
+    }
+    .aliveness-number {
+      font-size: 96px;
+      font-weight: 900;
+      line-height: 1;
+      letter-spacing: -0.04em;
+      font-variant-numeric: tabular-nums;
+    }
+    .aliveness-number.score-high   { color: #22c55e; }
+    .aliveness-number.score-mid    { color: #f59e0b; }
+    .aliveness-number.score-low    { color: #ef4444; }
+    .aliveness-denom {
+      font-size: 1rem;
+      color: #444;
+      margin-top: 2px;
+      font-weight: 500;
+    }
+    .aliveness-meta-col {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 12px;
+      padding: 28px 32px;
+    }
+    .aliveness-verdict {
+      font-size: 1.1rem;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .aliveness-verdict.verdict-high   { color: #22c55e; }
+    .aliveness-verdict.verdict-mid    { color: #f59e0b; }
+    .aliveness-verdict.verdict-low    { color: #ef4444; }
+    .dead-drill-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 14px;
+      border-radius: 20px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      width: fit-content;
+    }
+    .dead-drill-pill.is-dead { background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3); }
+    .dead-drill-pill.is-alive { background: rgba(34,197,94,0.12); color: #5edb8a; border: 1px solid rgba(34,197,94,0.25); }
+    .aliveness-score-label {
+      font-size: 0.65rem;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: #444;
+    }
+
+    /* Standard report card */
+    .report-card {
+      background: #16161e;
+      border: 1px solid #22222e;
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .report-card-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 11px 20px;
+      background: #131320;
+      border-bottom: 1px solid #22222e;
+    }
+    .report-card-header-icon { font-size: 0.9rem; }
+    .report-card-header-title {
+      font-size: 0.7rem;
+      font-weight: 800;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #6666aa;
+    }
+    .report-card.card-flag    { border-left: 3px solid #ef4444; }
+    .report-card.card-warn    { border-left: 3px solid #f59e0b; }
+    .report-card.card-suggest { border-left: 3px solid #4f7cff; }
+    .report-card.card-success { border-left: 3px solid #22c55e; }
+    .report-card.card-info    { border-left: 3px solid #3a3a5c; }
+    .report-card.card-flag    .report-card-header-title { color: #f87171; }
+    .report-card.card-warn    .report-card-header-title { color: #fbbf24; }
+    .report-card.card-suggest .report-card-header-title { color: #7b9fff; }
+    .report-card.card-success .report-card-header-title { color: #5edb8a; }
+    .report-card.card-info    .report-card-header-title { color: #7070a0; }
+
+    .report-card-body {
+      padding: 18px 22px;
+      font-size: 0.85rem;
+      line-height: 1.75;
+      color: #c0c0d0;
+    }
+    .report-card-body p { margin-bottom: 6px; }
+    .report-card-body p:last-child { margin-bottom: 0; }
+    .report-card-body ul { margin: 6px 0 6px 18px; }
+    .report-card-body li { margin-bottom: 5px; }
+    .report-card-body strong { color: #f0f0f5; font-weight: 600; }
+    .report-card-body em { color: #a0b4ff; font-style: normal; font-weight: 500; }
+    .report-card-body code { background: #1a1a28; padding: 1px 6px; border-radius: 4px; font-family: 'SF Mono', 'Cascadia Code', monospace; font-size: 0.82em; color: #88ccff; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>Football Coaching Analysis</h1>
+    <p>MediaPipe pose detection · Claude Opus analysis · Yearby / Ecological Dynamics framework</p>
+  </header>
+
+  <!-- Mode selector -->
+  <div class="mode-selector-wrap">
+    <div class="mode-selector-label">Select analysis mode</div>
+    <div class="mode-selector">
+      <button class="mode-btn active" data-mode="drill" id="modeDrillBtn">
+        <span class="mode-btn-icon">📋</span>
+        <span class="mode-btn-title">Drill Analysis</span>
+        <span class="mode-btn-desc">Score drill against the Alive Movement Problem Checklist · flag dead drills · suggest constraint manipulations</span>
+      </button>
+      <button class="mode-btn" data-mode="movement" id="modeMovementBtn">
+        <span class="mode-btn-icon">🏃</span>
+        <span class="mode-btn-title">Movement Analysis</span>
+        <span class="mode-btn-desc">Evaluate athlete's movement solution · identify constraints · flag compensation patterns</span>
+      </button>
+    </div>
+  </div>
+
+  <div id="uploadArea">
+    <div class="icon">🎬</div>
+    <p class="label"><strong>Click to upload</strong> or drag &amp; drop a video</p>
+    <p class="hint">MP4, MOV, WebM · processed client-side, nothing is stored</p>
+    <input type="file" id="fileInput" accept="video/*">
+  </div>
+
+  <div id="statusBar">
+    <div class="dot loading" id="statusDot"></div>
+    <span id="statusText">Loading pose model…</span>
+    <span id="fpsBadge"></span>
+  </div>
+
+  <div id="videoWrap">
+    <video id="video" playsinline></video>
+    <canvas id="outputCanvas"></canvas>
+    <div class="seek-row">
+      <input type="range" id="seekBar" min="0" max="100" value="0" step="0.1">
+      <span id="timeDisplay">0:00 / 0:00</span>
+    </div>
+    <div class="controls">
+      <button class="btn-primary" id="playPauseBtn">Pause</button>
+      <button class="btn-ghost"    id="restartBtn">Restart</button>
+      <select id="speedSelect" title="Playback speed">
+        <option value="0.1">0.1×</option>
+        <option value="0.25">0.25×</option>
+        <option value="0.5">0.5×</option>
+        <option value="1" selected>1×</option>
+        <option value="1.5">1.5×</option>
+        <option value="2">2×</option>
+      </select>
+      <label class="toggle-label"><input type="checkbox" id="showVideo" checked> Show video</label>
+      <label class="toggle-label"><input type="checkbox" id="showSkeleton" checked> Skeleton</label>
+    </div>
+  </div>
+
+  <div id="analysisSection">
+    <div class="analysis-header">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <h2 id="analysisTitle">Drill Analysis</h2>
+        <span class="analysis-mode-badge drill" id="analysisModeBadge">📋 Drill</span>
+      </div>
+      <button class="btn-ghost" id="analyzeBtn">Re-analyze</button>
+    </div>
+    <div class="context-row">
+      <input type="text" id="movementContextInput"
+        placeholder="Describe the drill (optional) — e.g., pass-rush 1v1, defensive end stance &amp; start, WR route running on air…">
+    </div>
+    <div id="reportSection"></div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+  <script>
+    /* === State === */
+    let currentMode = 'drill';
+
+    /* === Mode selector === */
+    const modeDrillBtn     = document.getElementById('modeDrillBtn');
+    const modeMovementBtn  = document.getElementById('modeMovementBtn');
+    const analysisTitle    = document.getElementById('analysisTitle');
+    const analysisModeBadge = document.getElementById('analysisModeBadge');
+    const movementContextInput = document.getElementById('movementContextInput');
+
+    const PLACEHOLDERS = {
+      drill:    'Describe the drill (optional) — e.g., pass-rush 1v1, defensive end stance & start, WR route running on air…',
+      movement: 'Describe the athlete / movement (optional) — e.g., defensive end, rep 3 of pass rush set, fatigued late in practice…',
+    };
+
+    function setMode(mode) {
+      currentMode = mode;
+      modeDrillBtn.classList.toggle('active', mode === 'drill');
+      modeMovementBtn.classList.toggle('active', mode === 'movement');
+      movementContextInput.placeholder = PLACEHOLDERS[mode];
+
+      if (mode === 'drill') {
+        analysisTitle.textContent = 'Drill Analysis';
+        analysisModeBadge.textContent = '📋 Drill';
+        analysisModeBadge.className = 'analysis-mode-badge drill';
+      } else {
+        analysisTitle.textContent = 'Movement Analysis';
+        analysisModeBadge.textContent = '🏃 Movement';
+        analysisModeBadge.className = 'analysis-mode-badge movement';
+      }
+    }
+
+    modeDrillBtn.addEventListener('click', () => setMode('drill'));
+    modeMovementBtn.addEventListener('click', () => setMode('movement'));
+
+    /* === DOM refs === */
+    const statusDot    = document.getElementById('statusDot');
+    const statusText   = document.getElementById('statusText');
+    const fpsBadge     = document.getElementById('fpsBadge');
+    const video        = document.getElementById('video');
+    const canvas       = document.getElementById('outputCanvas');
+    const ctx          = canvas.getContext('2d');
+    const videoWrap    = document.getElementById('videoWrap');
+    const fileInput    = document.getElementById('fileInput');
+    const uploadArea   = document.getElementById('uploadArea');
+    const playPauseBtn = document.getElementById('playPauseBtn');
+    const restartBtn   = document.getElementById('restartBtn');
+    const speedSelect  = document.getElementById('speedSelect');
+    const seekBar      = document.getElementById('seekBar');
+    const timeDisplay  = document.getElementById('timeDisplay');
+    const showVideoChk    = document.getElementById('showVideo');
+    const showSkeletonChk = document.getElementById('showSkeleton');
+    const analysisSection = document.getElementById('analysisSection');
+    const reportSection   = document.getElementById('reportSection');
+    const analyzeBtn      = document.getElementById('analyzeBtn');
+
+    /* === MediaPipe === */
+    let lastResults  = null;
+    let isProcessing = false;
+    let fpsCount = 0;
+    let fpsTimer = Date.now();
+    let rafId    = null;
+
+    const pose = new Pose({
+      locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+    });
+
+    pose.setOptions({
+      modelComplexity: 1,
+      smoothLandmarks: true,
+      enableSegmentation: false,
+      smoothSegmentation: false,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5,
+    });
+
+    pose.onResults(results => {
+      isProcessing = false;
+      lastResults  = results;
+      if (results.poseLandmarks) collectAngles(results.poseLandmarks);
+      fpsCount++;
+      const now = Date.now();
+      if (now - fpsTimer >= 1000) {
+        fpsBadge.textContent = `${fpsCount} fps`;
+        fpsCount = 0;
+        fpsTimer = now;
+      }
+    });
+
+    pose.initialize().then(() => {
+      statusDot.className = 'dot ready';
+      statusText.textContent = 'Model ready — select a mode and upload a video';
+    }).catch(err => {
+      statusDot.className = 'dot error';
+      statusText.textContent = `Failed to load model: ${err.message}`;
+    });
+
+    /* === Render loop === */
+    function renderFrame() {
+      const W = video.videoWidth  || 640;
+      const H = video.videoHeight || 360;
+      if (canvas.width  !== W) canvas.width  = W;
+      if (canvas.height !== H) canvas.height = H;
+      ctx.clearRect(0, 0, W, H);
+      if (showVideoChk.checked) {
+        ctx.drawImage(video, 0, 0, W, H);
+      } else {
+        ctx.fillStyle = '#111';
+        ctx.fillRect(0, 0, W, H);
+      }
+      if (showSkeletonChk.checked && lastResults?.poseLandmarks) {
+        drawConnectors(ctx, lastResults.poseLandmarks, POSE_CONNECTIONS, { color: '#00E5FF', lineWidth: 2 });
+        drawLandmarks(ctx, lastResults.poseLandmarks, { color: '#FF5722', fillColor: '#FF572280', lineWidth: 1, radius: 4 });
+      }
+      if (!isProcessing && !video.paused && !video.ended) {
+        isProcessing = true;
+        pose.send({ image: video });
+      }
+      rafId = requestAnimationFrame(renderFrame);
+    }
+
+    /* === Video events === */
+    video.addEventListener('loadedmetadata', () => {
+      videoWrap.classList.add('visible');
+      video.playbackRate = parseFloat(speedSelect.value);
+      video.play().catch(() => {});
+      statusDot.className = 'dot active';
+      statusText.textContent = 'Processing video…';
+      playPauseBtn.textContent = 'Pause';
+      if (!rafId) renderFrame();
+    });
+
+    video.addEventListener('ended', () => {
+      statusDot.className = 'dot ready';
+      statusText.textContent = 'Video complete';
+      playPauseBtn.textContent = 'Play';
+      fpsBadge.textContent = '';
+      analysisSection.style.display = 'flex';
+      analyzeMovement();
+    });
+
+    /* === File upload === */
+    function loadVideo(file) {
+      if (!file?.type.startsWith('video/')) return;
+      resetAngleData();
+      lastResults = null;
+      analysisSection.style.display = 'none';
+      reportSection.innerHTML = '';
+      video.src = URL.createObjectURL(file);
+    }
+
+    uploadArea.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', e => loadVideo(e.target.files[0]));
+    uploadArea.addEventListener('dragover', e => { e.preventDefault(); uploadArea.classList.add('drag-over'); });
+    uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('drag-over'));
+    uploadArea.addEventListener('drop', e => {
+      e.preventDefault();
+      uploadArea.classList.remove('drag-over');
+      loadVideo(e.dataTransfer.files[0]);
+    });
+
+    /* === Playback controls === */
+    playPauseBtn.addEventListener('click', () => {
+      if (video.paused || video.ended) {
+        video.play().catch(() => {});
+        playPauseBtn.textContent = 'Pause';
+        statusDot.className = 'dot active';
+        statusText.textContent = 'Processing video…';
+        if (!rafId) renderFrame();
+      } else {
+        video.pause();
+        playPauseBtn.textContent = 'Play';
+      }
+    });
+
+    restartBtn.addEventListener('click', () => {
+      if (!video.src) return;
+      resetAngleData();
+      lastResults = null;
+      analysisSection.style.display = 'none';
+      reportSection.innerHTML = '';
+      video.currentTime = 0;
+      video.play().catch(() => {});
+      playPauseBtn.textContent = 'Pause';
+      statusDot.className = 'dot active';
+      statusText.textContent = 'Processing video…';
+      if (!rafId) renderFrame();
+    });
+
+    speedSelect.addEventListener('change', () => { video.playbackRate = parseFloat(speedSelect.value); });
+
+    video.addEventListener('timeupdate', () => {
+      const cur = video.currentTime, dur = video.duration || 0;
+      seekBar.value = dur ? (cur / dur) * 100 : 0;
+      timeDisplay.textContent = `${fmt(cur)} / ${fmt(dur)}`;
+    });
+
+    seekBar.addEventListener('input', () => {
+      if (video.duration) video.currentTime = (seekBar.value / 100) * video.duration;
+    });
+
+    function fmt(t) {
+      const m = Math.floor(t / 60);
+      const s = Math.floor(t % 60).toString().padStart(2, '0');
+      return `${m}:${s}`;
+    }
+
+    /* === Joint angle collection === */
+    const angleData = { leftKnee: [], rightKnee: [], leftHip: [], rightHip: [], spine: [] };
+
+    function angleBetween(a, b, c) {
+      const bax = a.x - b.x, bay = a.y - b.y, baz = (a.z || 0) - (b.z || 0);
+      const bcx = c.x - b.x, bcy = c.y - b.y, bcz = (c.z || 0) - (b.z || 0);
+      const dot = bax*bcx + bay*bcy + baz*bcz;
+      const mag = Math.sqrt((bax*bax + bay*bay + baz*baz) * (bcx*bcx + bcy*bcy + bcz*bcz));
+      if (mag < 1e-9) return null;
+      return Math.acos(Math.max(-1, Math.min(1, dot / mag))) * (180 / Math.PI);
+    }
+
+    function spineFromVertical(lm) {
+      const msx = (lm[11].x + lm[12].x) / 2, msy = (lm[11].y + lm[12].y) / 2;
+      const mhx = (lm[23].x + lm[24].x) / 2, mhy = (lm[23].y + lm[24].y) / 2;
+      const dx = msx - mhx, dy = msy - mhy;
+      const mag = Math.sqrt(dx*dx + dy*dy);
+      if (mag < 1e-9) return null;
+      return Math.acos(Math.max(-1, Math.min(1, -dy / mag))) * (180 / Math.PI);
+    }
+
+    function collectAngles(lm) {
+      const lk = angleBetween(lm[23], lm[25], lm[27]);
+      const rk = angleBetween(lm[24], lm[26], lm[28]);
+      const lh = angleBetween(lm[11], lm[23], lm[25]);
+      const rh = angleBetween(lm[12], lm[24], lm[26]);
+      const sp = spineFromVertical(lm);
+      if (lk !== null) angleData.leftKnee.push(lk);
+      if (rk !== null) angleData.rightKnee.push(rk);
+      if (lh !== null) angleData.leftHip.push(lh);
+      if (rh !== null) angleData.rightHip.push(rh);
+      if (sp !== null) angleData.spine.push(sp);
+    }
+
+    function resetAngleData() {
+      for (const k of Object.keys(angleData)) angleData[k] = [];
+    }
+
+    function statOf(arr) {
+      if (!arr.length) return null;
+      let min = arr[0], max = arr[0], sum = 0;
+      for (const v of arr) { if (v < min) min = v; if (v > max) max = v; sum += v; }
+      return { min: min.toFixed(1), max: max.toFixed(1), avg: (sum / arr.length).toFixed(1) };
+    }
+
+    /* === Claude API call === */
+    async function analyzeMovement() {
+      const totalFrames = Math.max(...Object.values(angleData).map(a => a.length));
+      if (totalFrames < 5) {
+        reportSection.innerHTML = '<p class="report-error">Not enough pose data collected. Ensure the athlete is clearly visible throughout the video.</p>';
+        return;
+      }
+
+      const modeLabel = currentMode === 'drill' ? 'Drill Analysis' : 'Movement Analysis';
+      reportSection.innerHTML = `
+        <div class="analyzing">
+          <div class="analyzing-spinner"></div>
+          Running ${modeLabel} with Claude Opus…
+        </div>`;
+
+      try {
+        const res = await fetch('/api/analyze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            mode: currentMode,
+            duration: video.duration ? `${video.duration.toFixed(1)}s` : 'unknown',
+            totalFrames,
+            context: movementContextInput.value.trim(),
+            angles: {
+              leftKnee:  statOf(angleData.leftKnee),
+              rightKnee: statOf(angleData.rightKnee),
+              leftHip:   statOf(angleData.leftHip),
+              rightHip:  statOf(angleData.rightHip),
+              spine:     statOf(angleData.spine),
+            },
+          }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        if (!data.analysis) throw new Error('Empty response from Claude');
+        renderReport(data.analysis, data.mode || currentMode);
+      } catch (err) {
+        reportSection.innerHTML = `<div class="report-error">Analysis failed: ${esc(err.message)}</div>`;
+      }
+    }
+
+    analyzeBtn.addEventListener('click', analyzeMovement);
+
+    /* === Report renderer === */
+    function esc(s) {
+      return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    }
+
+    function inlineMd(s) {
+      return s
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.+?)\*/g,     '<em>$1</em>')
+        .replace(/`(.+?)`/g,       '<code>$1</code>');
+    }
+
+    function bodyToHtml(bodyLines) {
+      const out = [];
+      let i = 0;
+      while (i < bodyLines.length) {
+        const line = bodyLines[i];
+        if (/^[-*] /.test(line)) {
+          const items = [];
+          while (i < bodyLines.length && /^[-*] /.test(bodyLines[i])) {
+            items.push(`<li>${inlineMd(esc(bodyLines[i].slice(2)))}</li>`);
+            i++;
+          }
+          out.push(`<ul>${items.join('')}</ul>`);
+          continue;
+        } else if (line.trim() === '') {
+          // skip blank
+        } else {
+          out.push(`<p>${inlineMd(esc(line))}</p>`);
+        }
+        i++;
+      }
+      return out.join('');
+    }
+
+    /* Card config by section title — dead drill assessment is dynamic */
+    const CARD_STYLES = {
+      'missing information sources':   { cls: 'card-warn',    icon: '⚠️' },
+      'aliveness checklist':           { cls: 'card-info',    icon: '✅' },
+      'constraint manipulations':      { cls: 'card-suggest', icon: '🔧' },
+      'movement problem':              { cls: 'card-info',    icon: '🎯' },
+      'constraints shaping this movement': { cls: 'card-info', icon: '⚙️' },
+      'functional assessment':         { cls: 'card-success', icon: '📊' },
+      'compensation patterns':         { cls: 'card-flag',    icon: '⚠️' },
+      'coaching recommendations':      { cls: 'card-suggest', icon: '💡' },
+    };
+
+    function renderReport(text, mode) {
+      const cards = [];
+
+      /* ── Extract metadata lines for drill mode ── */
+      let alivenessScore  = null;
+      let isDeadDrill     = null;
+      let alivenessVerdict = null;
+
+      const metaLines = [];
+      const bodyLines = text.split('\n');
+      const remainingLines = [];
+
+      for (const line of bodyLines) {
+        const scoreMatch = line.match(/^ALIVENESS_SCORE:\s*(\d+)/i);
+        const deadMatch  = line.match(/^DEAD_DRILL:\s*(YES|NO)/i);
+        const verdictMatch = line.match(/^ALIVENESS_VERDICT:\s*(.+)/i);
+
+        if (scoreMatch)   { alivenessScore   = parseInt(scoreMatch[1], 10); }
+        else if (deadMatch)    { isDeadDrill     = deadMatch[1].toUpperCase() === 'YES'; }
+        else if (verdictMatch) { alivenessVerdict = verdictMatch[1].trim(); }
+        else               { remainingLines.push(line); }
+      }
+
+      /* ── Aliveness hero card (drill mode only) ── */
+      if (mode === 'drill' && alivenessScore !== null) {
+        const scoreNum   = Math.max(1, Math.min(10, alivenessScore));
+        const numCls     = scoreNum >= 8 ? 'score-high' : scoreNum >= 5 ? 'score-mid' : 'score-low';
+        const verdictCls = scoreNum >= 8 ? 'verdict-high' : scoreNum >= 5 ? 'verdict-mid' : 'verdict-low';
+        const verdictText = alivenessVerdict || (scoreNum >= 8 ? 'HIGHLY ALIVE' : scoreNum >= 5 ? 'PARTIALLY ALIVE' : 'DEAD DRILL');
+        const deadPillCls   = isDeadDrill ? 'is-dead' : 'is-alive';
+        const deadPillText  = isDeadDrill ? '🚫 Dead Drill' : '✅ Not a Dead Drill';
+        const deadPillHtml  = isDeadDrill !== null
+          ? `<div class="dead-drill-pill ${deadPillCls}">${deadPillText}</div>` : '';
+
+        cards.push(`
+          <div class="aliveness-card">
+            <div class="aliveness-card-inner">
+              <div class="aliveness-score-col">
+                <div class="aliveness-score-label">Aliveness Score</div>
+                <div class="aliveness-number ${numCls}">${scoreNum}</div>
+                <div class="aliveness-denom">/ 10</div>
+              </div>
+              <div class="aliveness-meta-col">
+                <div class="aliveness-verdict ${verdictCls}">${esc(verdictText)}</div>
+                ${deadPillHtml}
+              </div>
+            </div>
+          </div>`);
+      }
+
+      /* ── Parse sections from remaining lines ── */
+      const sections = [];
+      let current = null;
+
+      for (const line of remainingLines) {
+        if (/^## /.test(line)) {
+          if (current) sections.push(current);
+          current = { title: line.slice(3).trim(), lines: [] };
+        } else if (current) {
+          current.lines.push(line);
+        }
+      }
+      if (current) sections.push(current);
+
+      /* ── Render each section as a card ── */
+      for (const sec of sections) {
+        const key    = sec.title.toLowerCase();
+        // Dead Drill Assessment card color is dynamic based on verdict
+        let style;
+        if (key === 'dead drill assessment') {
+          style = isDeadDrill === true  ? { cls: 'card-flag',    icon: '🚫' }
+               : isDeadDrill === false ? { cls: 'card-success', icon: '✅' }
+               : { cls: 'card-info', icon: '📋' };
+        } else {
+          style = CARD_STYLES[key] || { cls: '', icon: '📄' };
+        }
+        const html   = bodyToHtml(sec.lines);
+        if (!html.trim()) continue;
+
+        cards.push(`
+          <div class="report-card ${style.cls}">
+            <div class="report-card-header">
+              <span class="report-card-header-icon">${style.icon}</span>
+              <span class="report-card-header-title">${esc(sec.title)}</span>
+            </div>
+            <div class="report-card-body">${html}</div>
+          </div>`);
+      }
+
+      /* ── Fallback: if no sections parsed, render plain text ── */
+      if (cards.length === 0) {
+        reportSection.innerHTML = `<div class="report-card"><div class="report-card-body">${bodyToHtml(remainingLines)}</div></div>`;
+        return;
+      }
+
+      reportSection.innerHTML = cards.join('');
+    }
+  </script>
+</body>
+</html>
