@@ -382,11 +382,79 @@
     .report-card.card-suggest { border-left: 3px solid #4f7cff; }
     .report-card.card-success { border-left: 3px solid #22c55e; }
     .report-card.card-info    { border-left: 3px solid #3a3a5c; }
+    .report-card.card-opportunity { border-left: 3px solid #a78bfa; }
     .report-card.card-flag    .report-card-header-title { color: #f87171; }
     .report-card.card-warn    .report-card-header-title { color: #fbbf24; }
     .report-card.card-suggest .report-card-header-title { color: #7b9fff; }
     .report-card.card-success .report-card-header-title { color: #5edb8a; }
     .report-card.card-info    .report-card-header-title { color: #7070a0; }
+    .report-card.card-opportunity .report-card-header-title { color: #c4b5fd; }
+
+    /* ── Plain-language summary cards get slightly larger type — these are the scannable top 3 ── */
+    .report-card.card-plain .report-card-body { font-size: 0.92rem; }
+    .report-card.card-plain .report-card-header-title { font-size: 0.74rem; }
+
+    /* ── Detailed framework analysis toggle ── */
+    #frameworkDetail {
+      background: #131320;
+      border: 1px solid #22222e;
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    #frameworkDetail summary {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 14px 20px;
+      cursor: pointer;
+      list-style: none;
+      user-select: none;
+      font-size: 0.8rem;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      color: #9797c8;
+    }
+    #frameworkDetail summary::-webkit-details-marker { display: none; }
+    #frameworkDetail summary .chevron { transition: transform 0.18s; color: #55558a; }
+    #frameworkDetail[open] summary .chevron { transform: rotate(90deg); }
+    #frameworkDetail summary:hover { color: #b8b8e8; }
+    #frameworkDetail .framework-body {
+      padding: 4px 16px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .framework-card {
+      background: #16161e;
+      border: 1px solid #22222e;
+      border-left: 3px solid #55558a;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    .framework-card.fw-flag    { border-left-color: #ef4444; }
+    .framework-card.fw-success { border-left-color: #22c55e; }
+    .framework-card-header {
+      padding: 9px 16px;
+      font-size: 0.66rem;
+      font-weight: 800;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+      color: #8080b0;
+      background: #131320;
+      border-bottom: 1px solid #22222e;
+    }
+    .framework-card-body {
+      padding: 14px 18px;
+      font-size: 0.8rem;
+      line-height: 1.7;
+      color: #a8a8c0;
+    }
+    .framework-card-body p { margin-bottom: 6px; }
+    .framework-card-body p:last-child { margin-bottom: 0; }
+    .framework-card-body ul { margin: 6px 0 6px 18px; }
+    .framework-card-body li { margin-bottom: 5px; }
+    .framework-card-body strong { color: #d8d8f0; font-weight: 600; }
+    .framework-card-body em { color: #a0b4ff; font-style: normal; font-weight: 500; }
 
     .report-card-body {
       padding: 18px 22px;
@@ -821,16 +889,22 @@
       return out.join('');
     }
 
-    /* Card config by section title — dead drill assessment is dynamic */
-    const CARD_STYLES = {
-      'missing information sources':   { cls: 'card-warn',    icon: '⚠️' },
-      'aliveness checklist':           { cls: 'card-info',    icon: '✅' },
-      'constraint manipulations':      { cls: 'card-suggest', icon: '🔧' },
-      'movement problem':              { cls: 'card-info',    icon: '🎯' },
-      'constraints shaping this movement': { cls: 'card-info', icon: '⚙️' },
-      'functional assessment':         { cls: 'card-success', icon: '📊' },
-      'compensation patterns':         { cls: 'card-flag',    icon: '⚠️' },
-      'coaching recommendations':      { cls: 'card-suggest', icon: '💡' },
+    /* Top-level plain-language sections (scannable in under 30 seconds) */
+    const PLAIN_CARD_STYLES = {
+      "what's working":   { cls: 'card-success',     icon: '✅' },
+      'what to work on':  { cls: 'card-opportunity',  icon: '🎯' },
+      'how to change it': { cls: 'card-suggest',      icon: '🛠️' },
+    };
+
+    /* Sub-cards inside the collapsed "Detailed Framework Analysis" section */
+    const FRAMEWORK_CARD_STYLES = {
+      'aliveness checklist':               { icon: '✅' },
+      'missing information sources':       { icon: '⚠️' },
+      'constraint manipulations':          { icon: '🔧' },
+      'movement problem':                  { icon: '🎯' },
+      'constraints shaping this movement': { icon: '⚙️' },
+      'functional assessment':             { icon: '📊' },
+      'compensation patterns':             { icon: '⚠️' },
     };
 
     function renderReport(text, mode) {
@@ -883,7 +957,7 @@
           </div>`);
       }
 
-      /* ── Parse sections from remaining lines ── */
+      /* ── Parse top-level (##) sections from remaining lines ── */
       const sections = [];
       let current = null;
 
@@ -897,23 +971,23 @@
       }
       if (current) sections.push(current);
 
-      /* ── Render each section as a card ── */
+      /* ── Split out the "Detailed Framework Analysis" section (rendered separately, collapsed) ── */
+      let frameworkSection = null;
+      const plainSections = [];
       for (const sec of sections) {
-        const key    = sec.title.toLowerCase();
-        // Dead Drill Assessment card color is dynamic based on verdict
-        let style;
-        if (key === 'dead drill assessment') {
-          style = isDeadDrill === true  ? { cls: 'card-flag',    icon: '🚫' }
-               : isDeadDrill === false ? { cls: 'card-success', icon: '✅' }
-               : { cls: 'card-info', icon: '📋' };
-        } else {
-          style = CARD_STYLES[key] || { cls: '', icon: '📄' };
-        }
-        const html   = bodyToHtml(sec.lines);
+        if (sec.title.toLowerCase() === 'detailed framework analysis') frameworkSection = sec;
+        else plainSections.push(sec);
+      }
+
+      /* ── Render the top 3 (or so) plain-language sections as scannable cards ── */
+      for (const sec of plainSections) {
+        const key   = sec.title.toLowerCase();
+        const style = PLAIN_CARD_STYLES[key] || { cls: 'card-info', icon: '📄' };
+        const html  = bodyToHtml(sec.lines);
         if (!html.trim()) continue;
 
         cards.push(`
-          <div class="report-card ${style.cls}">
+          <div class="report-card card-plain ${style.cls}">
             <div class="report-card-header">
               <span class="report-card-header-icon">${style.icon}</span>
               <span class="report-card-header-title">${esc(sec.title)}</span>
@@ -922,10 +996,50 @@
           </div>`);
       }
 
-      /* ── Fallback: if no sections parsed, render plain text ── */
-      if (cards.length === 0) {
+      /* ── Fallback: if no sections parsed at all, render plain text ── */
+      if (cards.length === 0 && !frameworkSection) {
         reportSection.innerHTML = `<div class="report-card"><div class="report-card-body">${bodyToHtml(remainingLines)}</div></div>`;
         return;
+      }
+
+      /* ── Render the collapsed "Detailed Framework Analysis" toggle, split into ### sub-cards ── */
+      if (frameworkSection) {
+        const subsections = [];
+        let sub = null;
+        for (const line of frameworkSection.lines) {
+          if (/^### /.test(line)) {
+            if (sub) subsections.push(sub);
+            sub = { title: line.slice(4).trim(), lines: [] };
+          } else if (sub) {
+            sub.lines.push(line);
+          } else if (line.trim() !== '') {
+            // intro text before the first ### subsection (e.g. Claude's bracket note) — ignore
+          }
+        }
+        if (sub) subsections.push(sub);
+
+        const subCardsHtml = subsections.map(sub => {
+          const key = sub.title.toLowerCase();
+          let fwCls = '';
+          let icon  = (FRAMEWORK_CARD_STYLES[key] || {}).icon || '📚';
+          if (key === 'dead drill assessment') {
+            fwCls = isDeadDrill === true ? 'fw-flag' : isDeadDrill === false ? 'fw-success' : '';
+            icon  = isDeadDrill === true ? '🚫' : isDeadDrill === false ? '✅' : '📋';
+          }
+          const html = bodyToHtml(sub.lines);
+          if (!html.trim()) return '';
+          return `
+            <div class="framework-card ${fwCls}">
+              <div class="framework-card-header">${icon} ${esc(sub.title)}</div>
+              <div class="framework-card-body">${html}</div>
+            </div>`;
+        }).join('');
+
+        cards.push(`
+          <details id="frameworkDetail">
+            <summary><span class="chevron">▶</span> Show detailed framework analysis</summary>
+            <div class="framework-body">${subCardsHtml}</div>
+          </details>`);
       }
 
       reportSection.innerHTML = cards.join('');
