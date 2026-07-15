@@ -22,5 +22,5 @@ app.post('/api/analyze', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`\nFootball Coaching Analysis running at http://localhost:${PORT}\n`);
+  console.log(`\nThe Movement AI running at http://localhost:${PORT}\n`);
 });
