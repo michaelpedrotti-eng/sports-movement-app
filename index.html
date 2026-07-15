@@ -198,19 +198,46 @@
     .analysis-mode-badge.drill   { background: rgba(79,124,255,0.15); color: #7b9fff; border: 1px solid rgba(79,124,255,0.3); }
     .analysis-mode-badge.movement { background: rgba(34,197,94,0.12); color: #5edb8a; border: 1px solid rgba(34,197,94,0.25); }
 
-    .context-row input {
-      width: 100%;
-      background: #16161e;
-      border: 1px solid #22222e;
-      border-radius: 8px;
-      padding: 10px 14px;
-      color: #e2e2e8;
-      font-size: 0.82rem;
-      outline: none;
-      transition: border-color 0.15s;
+    .context-row {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
     }
-    .context-row input:focus { border-color: #4f7cff; }
-    .context-row input::placeholder { color: #333; }
+    .context-label {
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #6b6bb0;
+      padding: 0 2px;
+    }
+    .context-row textarea {
+      width: 100%;
+      resize: vertical;
+      min-height: 64px;
+      background: #16161e;
+      border: 1.5px solid #2e2e42;
+      border-radius: 10px;
+      padding: 14px 16px;
+      color: #e2e2e8;
+      font-size: 0.88rem;
+      font-family: inherit;
+      line-height: 1.5;
+      outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .context-row textarea:focus { border-color: #4f7cff; box-shadow: 0 0 0 3px rgba(79,124,255,0.12); }
+    .context-row textarea::placeholder { color: #3a3a4a; }
+
+    .btn-analyze {
+      align-self: flex-start;
+      padding: 11px 28px;
+      font-size: 0.88rem;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      border-radius: 9px;
+      box-shadow: 0 2px 14px rgba(79,124,255,0.3);
+    }
 
     /* ── Spinner ── */
     .analyzing {
@@ -442,12 +469,13 @@
         <h2 id="analysisTitle">Drill Analysis</h2>
         <span class="analysis-mode-badge drill" id="analysisModeBadge">📋 Drill</span>
       </div>
-      <button class="btn-ghost" id="analyzeBtn">Re-analyze</button>
     </div>
     <div class="context-row">
-      <input type="text" id="movementContextInput"
-        placeholder="Describe the drill (optional) — e.g., pass-rush 1v1, defensive end stance &amp; start, WR route running on air…">
+      <label class="context-label" for="movementContextInput">Context / Description</label>
+      <textarea id="movementContextInput" rows="2"
+        placeholder="Describe the drill (optional) — e.g., pass-rush 1v1, defensive end stance &amp; start, WR route running on air…"></textarea>
     </div>
+    <button class="btn-primary btn-analyze" id="analyzeBtn">🔎 Analyze</button>
     <div id="reportSection"></div>
   </div>
 
@@ -588,11 +616,9 @@
 
     video.addEventListener('ended', () => {
       statusDot.className = 'dot ready';
-      statusText.textContent = 'Video complete';
+      statusText.textContent = 'Video processed — add context and click Analyze';
       playPauseBtn.textContent = 'Play';
       fpsBadge.textContent = '';
-      analysisSection.style.display = 'flex';
-      analyzeMovement();
     });
 
     /* === File upload === */
@@ -600,8 +626,8 @@
       if (!file?.type.startsWith('video/')) return;
       resetAngleData();
       lastResults = null;
-      analysisSection.style.display = 'none';
       reportSection.innerHTML = '';
+      analysisSection.style.display = 'flex';
       video.src = URL.createObjectURL(file);
     }
 
@@ -633,7 +659,6 @@
       if (!video.src) return;
       resetAngleData();
       lastResults = null;
-      analysisSection.style.display = 'none';
       reportSection.innerHTML = '';
       video.currentTime = 0;
       video.play().catch(() => {});
@@ -749,7 +774,14 @@
       }
     }
 
-    analyzeBtn.addEventListener('click', analyzeMovement);
+    analyzeBtn.addEventListener('click', async () => {
+      analyzeBtn.disabled = true;
+      try {
+        await analyzeMovement();
+      } finally {
+        analyzeBtn.disabled = false;
+      }
+    });
 
     /* === Report renderer === */
     function esc(s) {
