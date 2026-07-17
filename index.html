@@ -27,7 +27,7 @@
     /* ── Mode Selector ── */
     .mode-selector-wrap {
       width: 100%;
-      max-width: 560px;
+      max-width: 640px;
       display: flex;
       flex-direction: column;
       gap: 8px;
@@ -42,7 +42,7 @@
     }
     .mode-selector {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: repeat(3, 1fr);
       gap: 6px;
       background: #16161e;
       border: 1px solid #22222e;
@@ -54,7 +54,7 @@
       flex-direction: column;
       align-items: flex-start;
       gap: 5px;
-      padding: 16px 18px;
+      padding: 14px 14px;
       border-radius: 9px;
       border: none;
       cursor: pointer;
@@ -98,7 +98,7 @@
       text-align: center;
       cursor: pointer;
       width: 100%;
-      max-width: 560px;
+      max-width: 640px;
       transition: border-color 0.18s, background 0.18s;
       user-select: none;
     }
@@ -121,7 +121,7 @@
       font-size: 0.78rem;
       color: #888;
       width: 100%;
-      max-width: 560px;
+      max-width: 640px;
     }
     .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: #444; }
     .dot.loading { background: #f59e0b; animation: blink 1.1s ease-in-out infinite; }
@@ -197,6 +197,7 @@
     }
     .analysis-mode-badge.drill   { background: rgba(79,124,255,0.15); color: #7b9fff; border: 1px solid rgba(79,124,255,0.3); }
     .analysis-mode-badge.movement { background: rgba(34,197,94,0.12); color: #5edb8a; border: 1px solid rgba(34,197,94,0.25); }
+    .analysis-mode-badge.injury  { background: rgba(34,211,238,0.12); color: #67e8f9; border: 1px solid rgba(34,211,238,0.28); }
 
     .context-row {
       display: flex;
@@ -354,6 +355,22 @@
       color: #444;
     }
 
+    /* ── Persistent injury-prevention disclaimer (always rendered, never depends on model output) ── */
+    .disclaimer-banner {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 14px 18px;
+      background: rgba(34,211,238,0.08);
+      border: 1px solid rgba(34,211,238,0.28);
+      border-radius: 12px;
+      font-size: 0.8rem;
+      line-height: 1.55;
+      color: #b6ecf5;
+    }
+    .disclaimer-banner .disclaimer-icon { font-size: 1.05rem; flex-shrink: 0; line-height: 1.3; }
+    .disclaimer-banner strong { color: #e0fbff; font-weight: 700; }
+
     /* Standard report card */
     .report-card {
       background: #16161e;
@@ -492,6 +509,11 @@
         <span class="mode-btn-title">Movement Analysis</span>
         <span class="mode-btn-desc">Evaluate athlete's movement solution · identify constraints · flag compensation patterns</span>
       </button>
+      <button class="mode-btn" data-mode="injury" id="modeInjuryBtn">
+        <span class="mode-btn-icon">🩹</span>
+        <span class="mode-btn-title">Injury Prevention</span>
+        <span class="mode-btn-desc">Screen for asymmetry and movement patterns worth flagging to an athletic trainer · not medical advice</span>
+      </button>
     </div>
   </div>
 
@@ -556,34 +578,43 @@
     /* === Mode selector === */
     const modeDrillBtn     = document.getElementById('modeDrillBtn');
     const modeMovementBtn  = document.getElementById('modeMovementBtn');
+    const modeInjuryBtn    = document.getElementById('modeInjuryBtn');
     const analysisTitle    = document.getElementById('analysisTitle');
     const analysisModeBadge = document.getElementById('analysisModeBadge');
     const movementContextInput = document.getElementById('movementContextInput');
 
-    const PLACEHOLDERS = {
-      drill:    'Describe the drill (optional) — e.g., pass-rush 1v1, defensive end stance & start, WR route running on air…',
-      movement: 'Describe the athlete / movement (optional) — e.g., defensive end, rep 3 of pass rush set, fatigued late in practice…',
+    const MODE_META = {
+      drill: {
+        title: 'Drill Analysis',
+        badge: '📋 Drill',
+        placeholder: 'Describe the drill (optional) — e.g., pass-rush 1v1, defensive end stance & start, WR route running on air…',
+      },
+      movement: {
+        title: 'Movement Analysis',
+        badge: '🏃 Movement',
+        placeholder: 'Describe the athlete / movement (optional) — e.g., defensive end, rep 3 of pass rush set, fatigued late in practice…',
+      },
+      injury: {
+        title: 'Injury Prevention',
+        badge: '🩹 Injury Prevention',
+        placeholder: 'Describe the session (optional) — e.g., post-practice screen, returning from tightness, general movement check…',
+      },
     };
 
     function setMode(mode) {
       currentMode = mode;
       modeDrillBtn.classList.toggle('active', mode === 'drill');
       modeMovementBtn.classList.toggle('active', mode === 'movement');
-      movementContextInput.placeholder = PLACEHOLDERS[mode];
-
-      if (mode === 'drill') {
-        analysisTitle.textContent = 'Drill Analysis';
-        analysisModeBadge.textContent = '📋 Drill';
-        analysisModeBadge.className = 'analysis-mode-badge drill';
-      } else {
-        analysisTitle.textContent = 'Movement Analysis';
-        analysisModeBadge.textContent = '🏃 Movement';
-        analysisModeBadge.className = 'analysis-mode-badge movement';
-      }
+      modeInjuryBtn.classList.toggle('active', mode === 'injury');
+      movementContextInput.placeholder = MODE_META[mode].placeholder;
+      analysisTitle.textContent = MODE_META[mode].title;
+      analysisModeBadge.textContent = MODE_META[mode].badge;
+      analysisModeBadge.className = `analysis-mode-badge ${mode}`;
     }
 
     modeDrillBtn.addEventListener('click', () => setMode('drill'));
     modeMovementBtn.addEventListener('click', () => setMode('movement'));
+    modeInjuryBtn.addEventListener('click', () => setMode('injury'));
 
     /* === DOM refs === */
     const statusDot    = document.getElementById('statusDot');
@@ -807,7 +838,7 @@
         return;
       }
 
-      const modeLabel = currentMode === 'drill' ? 'Drill Analysis' : 'Movement Analysis';
+      const modeLabel = MODE_META[currentMode].title;
       reportSection.innerHTML = `
         <div class="analyzing">
           <div class="analyzing-spinner"></div>
@@ -891,12 +922,18 @@
 
     /* Top-level plain-language sections (scannable in under 30 seconds) */
     const PLAIN_CARD_STYLES = {
-      "what's working":   { cls: 'card-success',     icon: '✅' },
-      'what to work on':  { cls: 'card-opportunity',  icon: '🎯' },
-      'how to change it': { cls: 'card-suggest',      icon: '🛠️' },
+      "what's working":         { cls: 'card-success',    icon: '✅' },
+      'what to work on':        { cls: 'card-opportunity', icon: '🎯' },
+      'how to change it':       { cls: 'card-suggest',     icon: '🛠️' },
+      'what looks solid':       { cls: 'card-success',    icon: '✅' },
+      'patterns worth watching': { cls: 'card-opportunity', icon: '👀' },
+      'suggested mobility work': { cls: 'card-suggest',     icon: '🤸' },
     };
 
-    /* Sub-cards inside the collapsed "Detailed Framework Analysis" section */
+    /* Section titles that mark the start of the collapsed "deeper analysis" block */
+    const DETAIL_SECTION_TITLES = new Set(['detailed framework analysis', 'detailed technical analysis']);
+
+    /* Sub-cards inside the collapsed detail section */
     const FRAMEWORK_CARD_STYLES = {
       'aliveness checklist':               { icon: '✅' },
       'missing information sources':       { icon: '⚠️' },
@@ -905,10 +942,22 @@
       'constraints shaping this movement': { icon: '⚙️' },
       'functional assessment':             { icon: '📊' },
       'compensation patterns':             { icon: '⚠️' },
+      'joint symmetry data':               { icon: '📐' },
+      'movement quality notes':            { icon: '🎥' },
+      'compensation indicators':           { icon: '⚠️' },
     };
+
+    const INJURY_DISCLAIMER_HTML = `
+      <div class="disclaimer-banner">
+        <span class="disclaimer-icon">⚕️</span>
+        <div><strong>Not medical advice.</strong> These are general movement observations only, not a diagnosis. Please consult a licensed athletic trainer, physical therapist, or physician with any concerns.</div>
+      </div>`;
 
     function renderReport(text, mode) {
       const cards = [];
+
+      /* ── Persistent disclaimer: always rendered for injury mode, independent of model output ── */
+      if (mode === 'injury') cards.push(INJURY_DISCLAIMER_HTML);
 
       /* ── Extract metadata lines for drill mode ── */
       let alivenessScore  = null;
@@ -971,11 +1020,11 @@
       }
       if (current) sections.push(current);
 
-      /* ── Split out the "Detailed Framework Analysis" section (rendered separately, collapsed) ── */
+      /* ── Split out the deeper-analysis section (rendered separately, collapsed) ── */
       let frameworkSection = null;
       const plainSections = [];
       for (const sec of sections) {
-        if (sec.title.toLowerCase() === 'detailed framework analysis') frameworkSection = sec;
+        if (DETAIL_SECTION_TITLES.has(sec.title.toLowerCase())) frameworkSection = sec;
         else plainSections.push(sec);
       }
 
@@ -996,13 +1045,14 @@
           </div>`);
       }
 
-      /* ── Fallback: if no sections parsed at all, render plain text ── */
-      if (cards.length === 0 && !frameworkSection) {
-        reportSection.innerHTML = `<div class="report-card"><div class="report-card-body">${bodyToHtml(remainingLines)}</div></div>`;
+      /* ── Fallback: if no sections parsed at all, render plain text (disclaimer, if any, stays) ── */
+      if (plainSections.length === 0 && !frameworkSection) {
+        cards.push(`<div class="report-card"><div class="report-card-body">${bodyToHtml(remainingLines)}</div></div>`);
+        reportSection.innerHTML = cards.join('');
         return;
       }
 
-      /* ── Render the collapsed "Detailed Framework Analysis" toggle, split into ### sub-cards ── */
+      /* ── Render the collapsed deeper-analysis toggle, split into ### sub-cards ── */
       if (frameworkSection) {
         const subsections = [];
         let sub = null;
@@ -1037,7 +1087,7 @@
 
         cards.push(`
           <details id="frameworkDetail">
-            <summary><span class="chevron">▶</span> Show detailed framework analysis</summary>
+            <summary><span class="chevron">▶</span> Show ${esc(frameworkSection.title.toLowerCase())}</summary>
             <div class="framework-body">${subCardsHtml}</div>
           </details>`);
       }
