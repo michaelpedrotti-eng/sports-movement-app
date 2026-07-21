@@ -130,6 +130,7 @@
     .dot.error   { background: #ef4444; }
     @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
     #fpsBadge { margin-left: auto; font-variant-numeric: tabular-nums; color: #555; }
+    #trackingBadge { color: #f59e0b; font-size: 0.75rem; }
 
     /* ── Video ── */
     #videoWrap { display: none; flex-direction: column; align-items: center; width: 100%; max-width: 900px; gap: 12px; }
@@ -528,12 +529,17 @@
   <div id="statusBar">
     <div class="dot loading" id="statusDot"></div>
     <span id="statusText">Loading pose model…</span>
+    <span id="trackingBadge"></span>
     <span id="fpsBadge"></span>
   </div>
 
   <div id="videoWrap">
     <video id="video" playsinline></video>
     <canvas id="outputCanvas"></canvas>
+    <div class="controls" id="selectionControls" style="display:none;">
+      <button class="btn-ghost" id="drawCropBtn">✏️ Draw crop box</button>
+      <button class="btn-ghost" id="useFullFrameBtn">Analyze full frame</button>
+    </div>
     <div class="seek-row">
       <input type="range" id="seekBar" min="0" max="100" value="0" step="0.1">
       <span id="timeDisplay">0:00 / 0:00</span>
@@ -623,6 +629,7 @@
     const statusDot    = document.getElementById('statusDot');
     const statusText   = document.getElementById('statusText');
     const fpsBadge     = document.getElementById('fpsBadge');
+    const trackingBadge = document.getElementById('trackingBadge');
     const video        = document.getElementById('video');
     const canvas       = document.getElementById('outputCanvas');
     const ctx          = canvas.getContext('2d');
@@ -639,6 +646,9 @@
     const analysisSection = document.getElementById('analysisSection');
     const reportSection   = document.getElementById('reportSection');
     const analyzeBtn      = document.getElementById('analyzeBtn');
+    const selectionControls = document.getElementById('selectionControls');
+    const drawCropBtn     = document.getElementById('drawCropBtn');
+    const useFullFrameBtn = document.getElementById('useFullFrameBtn');
 
     /* === MediaPipe === */
     let lastResults  = null;
@@ -651,9 +661,21 @@
     const personModelPromise = cocoSsd.load();
     let detectedBoxes    = [];   // [{x,y,width,height,index}] in video pixel space
     let awaitingSelection = false;
+    let manualCropMode    = false;
+    let dragStart         = null; // {x,y} in video pixel space, while dragging a manual crop box
+    let dragCurrent       = null;
     let cropRect          = null; // {x,y,width,height} in video pixel space, or null = full frame
     const cropCanvas = document.createElement('canvas');
     const cropCtx    = cropCanvas.getContext('2d');
+
+    /* === Cross-frame tracking === */
+    const searchCanvas = document.createElement('canvas');
+    const searchCtx    = searchCanvas.getContext('2d');
+    let isTracking      = false;
+    let trackingLost    = false;
+    let lastTrackTime    = 0;
+    const TRACK_INTERVAL_MS  = 600;
+    const TRACK_SEARCH_SCALE = 2.2;
 
     const pose = new Pose({
       locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
@@ -698,6 +720,56 @@
       }));
     }
 
+    function expandRect(rect, factor, maxW, maxH) {
+      const cx = rect.x + rect.width  / 2;
+      const cy = rect.y + rect.height / 2;
+      const width  = Math.min(maxW, rect.width  * factor);
+      const height = Math.min(maxH, rect.height * factor);
+      const x = Math.max(0, Math.min(maxW - width,  cx - width  / 2));
+      const y = Math.max(0, Math.min(maxH - height, cy - height / 2));
+      return { x, y, width, height };
+    }
+
+    // Re-run person detection within an expanded search area around the last known position,
+    // roughly every TRACK_INTERVAL_MS of playback, to keep the crop region on the selected athlete
+    // as they move. Lightweight and imperfect by design: if nobody is found nearby, we simply keep
+    // the last known cropRect rather than losing track entirely.
+    async function updateTracking() {
+      if (isTracking || !cropRect) return;
+      isTracking = true;
+      try {
+        const searchRect = expandRect(cropRect, TRACK_SEARCH_SCALE, video.videoWidth, video.videoHeight);
+        searchCanvas.width  = searchRect.width;
+        searchCanvas.height = searchRect.height;
+        searchCtx.drawImage(video, searchRect.x, searchRect.y, searchRect.width, searchRect.height, 0, 0, searchRect.width, searchRect.height);
+
+        const model = await personModelPromise;
+        const preds = await model.detect(searchCanvas);
+        const people = preds.filter(p => p.class === 'person' && p.score > 0.4);
+
+        if (people.length > 0) {
+          const prevCx = cropRect.x + cropRect.width / 2;
+          const prevCy = cropRect.y + cropRect.height / 2;
+          let best = null, bestDist = Infinity;
+          for (const p of people) {
+            const bx = searchRect.x + p.bbox[0], by = searchRect.y + p.bbox[1];
+            const cx = bx + p.bbox[2] / 2, cy = by + p.bbox[3] / 2;
+            const dist = (cx - prevCx) ** 2 + (cy - prevCy) ** 2;
+            if (dist < bestDist) { bestDist = dist; best = { x: bx, y: by, width: p.bbox[2], height: p.bbox[3] }; }
+          }
+          cropRect = computeCropRect(best);
+          trackingLost = false;
+        } else {
+          trackingLost = true; // keep the last known cropRect — graceful degradation, not a crash
+        }
+      } catch (err) {
+        console.error('Tracking update failed:', err.message);
+        trackingLost = true;
+      } finally {
+        isTracking = false;
+      }
+    }
+
     function renderFrame() {
       const W = video.videoWidth  || 640;
       const H = video.videoHeight || 360;
@@ -710,11 +782,17 @@
         ctx.fillStyle = '#111';
         ctx.fillRect(0, 0, W, H);
       }
+      if (cropRect) {
+        ctx.strokeStyle = trackingLost ? 'rgba(245,158,11,0.7)' : 'rgba(34,197,94,0.5)';
+        ctx.lineWidth = Math.max(1, W * 0.002);
+        ctx.strokeRect(cropRect.x, cropRect.y, cropRect.width, cropRect.height);
+      }
       if (showSkeletonChk.checked && lastResults?.poseLandmarks) {
         const drawLm = cropRect ? remapLandmarksToCanvas(lastResults.poseLandmarks, cropRect, W, H) : lastResults.poseLandmarks;
         drawConnectors(ctx, drawLm, POSE_CONNECTIONS, { color: '#00E5FF', lineWidth: 2 });
         drawLandmarks(ctx, drawLm, { color: '#FF5722', fillColor: '#FF572280', lineWidth: 1, radius: 4 });
       }
+      trackingBadge.textContent = trackingLost ? '⚠ tracking uncertain' : '';
       if (!isProcessing && !video.paused && !video.ended) {
         isProcessing = true;
         if (cropRect) {
@@ -724,6 +802,13 @@
           pose.send({ image: cropCanvas });
         } else {
           pose.send({ image: video });
+        }
+      }
+      if (cropRect && !awaitingSelection && !video.paused && !video.ended) {
+        const now = performance.now();
+        if (now - lastTrackTime > TRACK_INTERVAL_MS) {
+          lastTrackTime = now;
+          updateTracking(); // fire-and-forget — must not block the render loop
         }
       }
       rafId = requestAnimationFrame(renderFrame);
@@ -764,6 +849,36 @@
         ctx.fillStyle = '#fff';
         ctx.fillText(label, box.x + 8, Math.max(boxH - 6, box.y - 7));
       });
+      if (manualCropMode && dragStart && dragCurrent) {
+        const x = Math.min(dragStart.x, dragCurrent.x);
+        const y = Math.min(dragStart.y, dragCurrent.y);
+        const w = Math.abs(dragCurrent.x - dragStart.x);
+        const h = Math.abs(dragCurrent.y - dragStart.y);
+        ctx.strokeStyle = '#22c55e';
+        ctx.lineWidth = Math.max(2, W * 0.004);
+        ctx.setLineDash([10, 6]);
+        ctx.strokeRect(x, y, w, h);
+        ctx.setLineDash([]);
+      }
+    }
+
+    function enterSelectionMode(message) {
+      awaitingSelection = true;
+      canvas.classList.add('awaiting-selection');
+      setControlsEnabled(false);
+      selectionControls.style.display = 'flex';
+      statusText.textContent = message;
+      drawPersonSelectionOverlay();
+    }
+
+    function exitSelectionMode() {
+      awaitingSelection = false;
+      manualCropMode = false;
+      dragStart = null;
+      dragCurrent = null;
+      canvas.classList.remove('awaiting-selection');
+      selectionControls.style.display = 'none';
+      drawCropBtn.textContent = '✏️ Draw crop box';
     }
 
     function beginTrackedPlayback(message = 'Processing video…') {
@@ -771,13 +886,14 @@
       statusDot.className = 'dot active';
       statusText.textContent = message;
       playPauseBtn.textContent = 'Pause';
+      trackingLost = false;
+      lastTrackTime = performance.now();
       video.play().catch(() => {});
       if (!rafId) renderFrame();
     }
 
     function selectPerson(box) {
-      awaitingSelection = false;
-      canvas.classList.remove('awaiting-selection');
+      exitSelectionMode();
       cropRect = computeCropRect(box);
       detectedBoxes = [];
       beginTrackedPlayback();
@@ -831,29 +947,73 @@
         .filter(p => p.class === 'person' && p.score > 0.5)
         .map((p, i) => ({ x: p.bbox[0], y: p.bbox[1], width: p.bbox[2], height: p.bbox[3], score: p.score, index: i + 1 }));
 
-      if (detectedBoxes.length === 0) {
-        cropRect = null;
-        beginTrackedPlayback('No people detected — analyzing full frame');
-      } else if (detectedBoxes.length === 1) {
+      if (detectedBoxes.length === 1) {
         selectPerson(detectedBoxes[0]);
+      } else if (detectedBoxes.length === 0) {
+        enterSelectionMode('No people detected automatically — draw a crop box around the athlete, or analyze the full frame');
       } else {
-        awaitingSelection = true;
-        canvas.classList.add('awaiting-selection');
-        setControlsEnabled(false);
-        statusText.textContent = `${detectedBoxes.length} people detected — click the athlete you want to analyze`;
-        drawPersonSelectionOverlay();
+        enterSelectionMode(`${detectedBoxes.length} people detected — click the athlete you want to analyze, or draw a crop box`);
       }
     }
 
-    canvas.addEventListener('click', e => {
-      if (!awaitingSelection) return;
+    function canvasEventToVideoCoords(e) {
       const rect = canvas.getBoundingClientRect();
       const scaleX = canvas.width  / rect.width;
       const scaleY = canvas.height / rect.height;
-      const x = (e.clientX - rect.left) * scaleX;
-      const y = (e.clientY - rect.top)  * scaleY;
+      return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY };
+    }
+
+    canvas.addEventListener('click', e => {
+      if (!awaitingSelection || manualCropMode) return;
+      const { x, y } = canvasEventToVideoCoords(e);
       const box = detectedBoxes.find(b => x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height);
       if (box) selectPerson(box);
+    });
+
+    canvas.addEventListener('mousedown', e => {
+      if (!awaitingSelection || !manualCropMode) return;
+      dragStart = canvasEventToVideoCoords(e);
+      dragCurrent = dragStart;
+    });
+
+    canvas.addEventListener('mousemove', e => {
+      if (!awaitingSelection || !manualCropMode || !dragStart) return;
+      dragCurrent = canvasEventToVideoCoords(e);
+      drawPersonSelectionOverlay();
+    });
+
+    canvas.addEventListener('mouseup', () => {
+      if (!awaitingSelection || !manualCropMode || !dragStart || !dragCurrent) return;
+      const x = Math.min(dragStart.x, dragCurrent.x);
+      const y = Math.min(dragStart.y, dragCurrent.y);
+      const width  = Math.abs(dragCurrent.x - dragStart.x);
+      const height = Math.abs(dragCurrent.y - dragStart.y);
+      dragStart = null;
+      dragCurrent = null;
+      const MIN_CROP_SIZE = 24; // ignore accidental tiny drags/clicks
+      if (width < MIN_CROP_SIZE || height < MIN_CROP_SIZE) {
+        drawPersonSelectionOverlay();
+        return;
+      }
+      selectPerson({ x, y, width, height, index: 'manual' });
+    });
+
+    drawCropBtn.addEventListener('click', () => {
+      manualCropMode = !manualCropMode;
+      drawCropBtn.textContent = manualCropMode ? '✕ Cancel crop box' : '✏️ Draw crop box';
+      statusText.textContent = manualCropMode
+        ? 'Drag a box around the athlete you want to analyze'
+        : (detectedBoxes.length
+            ? `${detectedBoxes.length} people detected — click the athlete you want to analyze, or draw a crop box`
+            : 'No people detected automatically — draw a crop box around the athlete, or analyze the full frame');
+      drawPersonSelectionOverlay();
+    });
+
+    useFullFrameBtn.addEventListener('click', () => {
+      exitSelectionMode();
+      cropRect = null;
+      detectedBoxes = [];
+      beginTrackedPlayback('Analyzing full frame…');
     });
 
     /* === Video events === */
@@ -886,10 +1046,12 @@
       reportSection.innerHTML = '';
       analysisSection.style.display = 'flex';
       detectedBoxes = [];
-      awaitingSelection = false;
-      canvas.classList.remove('awaiting-selection');
       cropRect = null;
+      isTracking = false;
+      trackingLost = false;
+      trackingBadge.textContent = '';
       detectionTriggered = false;
+      exitSelectionMode();
       setControlsEnabled(true);
       video.src = URL.createObjectURL(file);
     }
@@ -923,6 +1085,8 @@
       resetAngleData();
       lastResults = null;
       reportSection.innerHTML = '';
+      trackingLost = false;
+      lastTrackTime = performance.now();
       video.currentTime = 0;
       video.play().catch(() => {});
       playPauseBtn.textContent = 'Pause';
