@@ -135,6 +135,7 @@
     #videoWrap { display: none; flex-direction: column; align-items: center; width: 100%; max-width: 900px; gap: 12px; }
     #videoWrap.visible { display: flex; }
     #outputCanvas { width: 100%; border-radius: 10px; background: #000; display: block; }
+    #outputCanvas.awaiting-selection { cursor: pointer; }
     #video { display: none; }
 
     .seek-row { display: flex; align-items: center; gap: 10px; width: 100%; }
@@ -571,6 +572,8 @@
 
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js" crossorigin="anonymous"></script>
   <script>
     /* === State === */
     let currentMode = 'drill';
@@ -644,6 +647,14 @@
     let fpsTimer = Date.now();
     let rafId    = null;
 
+    /* === Person detection / selection === */
+    const personModelPromise = cocoSsd.load();
+    let detectedBoxes    = [];   // [{x,y,width,height,index}] in video pixel space
+    let awaitingSelection = false;
+    let cropRect          = null; // {x,y,width,height} in video pixel space, or null = full frame
+    const cropCanvas = document.createElement('canvas');
+    const cropCtx    = cropCanvas.getContext('2d');
+
     const pose = new Pose({
       locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
     });
@@ -670,15 +681,23 @@
       }
     });
 
-    pose.initialize().then(() => {
+    Promise.all([pose.initialize(), personModelPromise]).then(() => {
       statusDot.className = 'dot ready';
-      statusText.textContent = 'Model ready — select a mode and upload a video';
+      statusText.textContent = 'Models ready — select a mode and upload a video';
     }).catch(err => {
       statusDot.className = 'dot error';
       statusText.textContent = `Failed to load model: ${err.message}`;
     });
 
     /* === Render loop === */
+    function remapLandmarksToCanvas(landmarks, crop, W, H) {
+      return landmarks.map(lm => ({
+        ...lm,
+        x: (crop.x + lm.x * crop.width)  / W,
+        y: (crop.y + lm.y * crop.height) / H,
+      }));
+    }
+
     function renderFrame() {
       const W = video.videoWidth  || 640;
       const H = video.videoHeight || 360;
@@ -692,25 +711,164 @@
         ctx.fillRect(0, 0, W, H);
       }
       if (showSkeletonChk.checked && lastResults?.poseLandmarks) {
-        drawConnectors(ctx, lastResults.poseLandmarks, POSE_CONNECTIONS, { color: '#00E5FF', lineWidth: 2 });
-        drawLandmarks(ctx, lastResults.poseLandmarks, { color: '#FF5722', fillColor: '#FF572280', lineWidth: 1, radius: 4 });
+        const drawLm = cropRect ? remapLandmarksToCanvas(lastResults.poseLandmarks, cropRect, W, H) : lastResults.poseLandmarks;
+        drawConnectors(ctx, drawLm, POSE_CONNECTIONS, { color: '#00E5FF', lineWidth: 2 });
+        drawLandmarks(ctx, drawLm, { color: '#FF5722', fillColor: '#FF572280', lineWidth: 1, radius: 4 });
       }
       if (!isProcessing && !video.paused && !video.ended) {
         isProcessing = true;
-        pose.send({ image: video });
+        if (cropRect) {
+          cropCanvas.width  = cropRect.width;
+          cropCanvas.height = cropRect.height;
+          cropCtx.drawImage(video, cropRect.x, cropRect.y, cropRect.width, cropRect.height, 0, 0, cropRect.width, cropRect.height);
+          pose.send({ image: cropCanvas });
+        } else {
+          pose.send({ image: video });
+        }
       }
       rafId = requestAnimationFrame(renderFrame);
     }
 
+    /* === Person detection & selection === */
+    function computeCropRect(box) {
+      const padX = box.width  * 0.25;
+      const padY = box.height * 0.2;
+      const x = Math.max(0, box.x - padX);
+      const y = Math.max(0, box.y - padY);
+      const width  = Math.min(video.videoWidth  - x, box.width  + padX * 2);
+      const height = Math.min(video.videoHeight - y, box.height + padY * 2);
+      return { x, y, width, height };
+    }
+
+    function setControlsEnabled(enabled) {
+      playPauseBtn.disabled = !enabled;
+      restartBtn.disabled   = !enabled;
+      seekBar.disabled      = !enabled;
+    }
+
+    function drawPersonSelectionOverlay() {
+      const W = video.videoWidth, H = video.videoHeight;
+      canvas.width = W; canvas.height = H;
+      ctx.clearRect(0, 0, W, H);
+      ctx.drawImage(video, 0, 0, W, H);
+      detectedBoxes.forEach(box => {
+        ctx.strokeStyle = '#4f7cff';
+        ctx.lineWidth = Math.max(2, W * 0.004);
+        ctx.strokeRect(box.x, box.y, box.width, box.height);
+        const label = `Person ${box.index}`;
+        ctx.font = `bold ${Math.max(16, Math.round(W * 0.02))}px sans-serif`;
+        const textW = ctx.measureText(label).width;
+        const boxH = Math.max(20, Math.round(W * 0.028));
+        ctx.fillStyle = '#4f7cff';
+        ctx.fillRect(box.x, Math.max(0, box.y - boxH), textW + 16, boxH);
+        ctx.fillStyle = '#fff';
+        ctx.fillText(label, box.x + 8, Math.max(boxH - 6, box.y - 7));
+      });
+    }
+
+    function beginTrackedPlayback(message = 'Processing video…') {
+      setControlsEnabled(true);
+      statusDot.className = 'dot active';
+      statusText.textContent = message;
+      playPauseBtn.textContent = 'Pause';
+      video.play().catch(() => {});
+      if (!rafId) renderFrame();
+    }
+
+    function selectPerson(box) {
+      awaitingSelection = false;
+      canvas.classList.remove('awaiting-selection');
+      cropRect = computeCropRect(box);
+      detectedBoxes = [];
+      beginTrackedPlayback();
+    }
+
+    function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    // Draw the current video frame to the canvas, retrying briefly if the browser hasn't actually
+    // decoded/painted a frame yet — 'loadeddata' can fire before pixels are truly readable.
+    async function drawPaintableFrame(maxAttempts = 10, delayMs = 100) {
+      canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+      for (let i = 0; i < maxAttempts; i++) {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+        let hasContent = false;
+        for (let p = 0; p < data.length; p += 397) {
+          if (data[p] > 10 || data[p + 1] > 10 || data[p + 2] > 10) { hasContent = true; break; }
+        }
+        if (hasContent) return;
+        await sleep(delayMs);
+      }
+      // proceed with whatever is drawn even if it never resolved — better than hanging forever
+    }
+
+    async function runPersonDetection() {
+      statusDot.className = 'dot active';
+      statusText.textContent = 'Detecting people in frame…';
+      // A paused video that has never played can fail to decode/paint any frame at all in some
+      // browsers. Force one real decode cycle with a flash play/pause before sampling the frame.
+      try {
+        await video.play();
+        video.pause();
+      } catch (err) {
+        // ignore — autoplay restrictions etc. drawPaintableFrame() below still retries.
+      }
+      await drawPaintableFrame();
+
+      let predictions = [];
+      try {
+        const model = await personModelPromise;
+        // Detect against the already-drawn canvas rather than the <video> element directly —
+        // more reliable across browsers/GPU backends for reading the current decoded frame.
+        predictions = await model.detect(canvas);
+      } catch (err) {
+        console.error('Person detection failed:', err.message);
+      }
+
+      detectedBoxes = predictions
+        .filter(p => p.class === 'person' && p.score > 0.5)
+        .map((p, i) => ({ x: p.bbox[0], y: p.bbox[1], width: p.bbox[2], height: p.bbox[3], score: p.score, index: i + 1 }));
+
+      if (detectedBoxes.length === 0) {
+        cropRect = null;
+        beginTrackedPlayback('No people detected — analyzing full frame');
+      } else if (detectedBoxes.length === 1) {
+        selectPerson(detectedBoxes[0]);
+      } else {
+        awaitingSelection = true;
+        canvas.classList.add('awaiting-selection');
+        setControlsEnabled(false);
+        statusText.textContent = `${detectedBoxes.length} people detected — click the athlete you want to analyze`;
+        drawPersonSelectionOverlay();
+      }
+    }
+
+    canvas.addEventListener('click', e => {
+      if (!awaitingSelection) return;
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width  / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const x = (e.clientX - rect.left) * scaleX;
+      const y = (e.clientY - rect.top)  * scaleY;
+      const box = detectedBoxes.find(b => x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height);
+      if (box) selectPerson(box);
+    });
+
     /* === Video events === */
+    let detectionTriggered = false;
     video.addEventListener('loadedmetadata', () => {
       videoWrap.classList.add('visible');
       video.playbackRate = parseFloat(speedSelect.value);
-      video.play().catch(() => {});
       statusDot.className = 'dot active';
-      statusText.textContent = 'Processing video…';
-      playPauseBtn.textContent = 'Pause';
-      if (!rafId) renderFrame();
+      statusText.textContent = 'Loading video frame…';
+    });
+
+    video.addEventListener('loadeddata', () => {
+      if (detectionTriggered) return;
+      detectionTriggered = true;
+      runPersonDetection();
     });
 
     video.addEventListener('ended', () => {
@@ -727,6 +885,12 @@
       lastResults = null;
       reportSection.innerHTML = '';
       analysisSection.style.display = 'flex';
+      detectedBoxes = [];
+      awaitingSelection = false;
+      canvas.classList.remove('awaiting-selection');
+      cropRect = null;
+      detectionTriggered = false;
+      setControlsEnabled(true);
       video.src = URL.createObjectURL(file);
     }
 
