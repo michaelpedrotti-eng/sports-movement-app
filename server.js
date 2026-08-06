@@ -3,6 +3,7 @@ import express from 'express';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { runAnalysis } from './lib/analysis.js';
+import { appendCorrectionLog } from './lib/logCorrection.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -19,6 +20,11 @@ app.post('/api/analyze', async (req, res) => {
     console.error('Claude API error:', err.message);
     res.status(err.status || 500).json({ error: err.message });
   }
+});
+
+app.post('/api/log-correction', (req, res) => {
+  appendCorrectionLog(req.body || {});
+  res.json({ ok: true });
 });
 
 app.listen(PORT, () => {

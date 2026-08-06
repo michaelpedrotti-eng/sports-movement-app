@@ -547,6 +547,7 @@
     <div class="controls">
       <button class="btn-primary" id="playPauseBtn">Pause</button>
       <button class="btn-ghost"    id="restartBtn">Restart</button>
+      <button class="btn-ghost"    id="redrawCropBtn">🎯 Redraw crop box</button>
       <select id="speedSelect" title="Playback speed">
         <option value="0.1">0.1×</option>
         <option value="0.25">0.25×</option>
@@ -638,6 +639,7 @@
     const uploadArea   = document.getElementById('uploadArea');
     const playPauseBtn = document.getElementById('playPauseBtn');
     const restartBtn   = document.getElementById('restartBtn');
+    const redrawCropBtn = document.getElementById('redrawCropBtn');
     const speedSelect  = document.getElementById('speedSelect');
     const seekBar      = document.getElementById('seekBar');
     const timeDisplay  = document.getElementById('timeDisplay');
@@ -677,6 +679,16 @@
     const TRACK_INTERVAL_MS  = 600;
     const TRACK_SEARCH_SCALE = 2.2;
 
+    /* === Tracking uncertainty & manual redraw === */
+    let redrawActive  = false;   // true whenever the user is mid-redraw (button or auto-triggered)
+    let redrawTrigger = null;    // 'user' | 'auto'
+    let previousBoxForLog = null; // cropRect snapshot taken right before a redraw begins
+    let missedTrackingCount     = 0; // consecutive periodic tracking checks that found nobody / jumped erratically
+    let consecutiveNoPoseFrames = 0; // consecutive render frames where MediaPipe found no pose
+    const MAX_MISSED_TRACKING = 2;   // ~2 tracking intervals (~1.2s) of lost/erratic tracking
+    const MAX_NO_POSE_FRAMES  = 45;  // ~1.5s at 30fps with no detected pose
+    const ERRATIC_JUMP_FACTOR = 1.8; // new center moving further than this * old box diagonal = suspicious
+
     const pose = new Pose({
       locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
     });
@@ -693,7 +705,15 @@
     pose.onResults(results => {
       isProcessing = false;
       lastResults  = results;
-      if (results.poseLandmarks) collectAngles(results.poseLandmarks);
+      if (results.poseLandmarks) {
+        collectAngles(results.poseLandmarks);
+        consecutiveNoPoseFrames = 0;
+      } else if (cropRect) {
+        // Only counts as a tracking-uncertainty signal while tracking a specific person —
+        // full-frame mode with nobody visible isn't a "lost the athlete" situation.
+        consecutiveNoPoseFrames++;
+        maybeAutoPauseForUncertainty();
+      }
       fpsCount++;
       const now = Date.now();
       if (now - fpsTimer >= 1000) {
@@ -750,6 +770,7 @@
         if (people.length > 0) {
           const prevCx = cropRect.x + cropRect.width / 2;
           const prevCy = cropRect.y + cropRect.height / 2;
+          const prevDiag = Math.hypot(cropRect.width, cropRect.height);
           let best = null, bestDist = Infinity;
           for (const p of people) {
             const bx = searchRect.x + p.bbox[0], by = searchRect.y + p.bbox[1];
@@ -757,16 +778,30 @@
             const dist = (cx - prevCx) ** 2 + (cy - prevCy) ** 2;
             if (dist < bestDist) { bestDist = dist; best = { x: bx, y: by, width: p.bbox[2], height: p.bbox[3] }; }
           }
+          const jumpDist = Math.sqrt(bestDist);
+          const erratic = jumpDist > prevDiag * ERRATIC_JUMP_FACTOR;
           cropRect = computeCropRect(best);
           trackingLost = false;
+          missedTrackingCount = erratic ? missedTrackingCount + 1 : 0;
         } else {
           trackingLost = true; // keep the last known cropRect — graceful degradation, not a crash
+          missedTrackingCount++;
         }
+        maybeAutoPauseForUncertainty();
       } catch (err) {
         console.error('Tracking update failed:', err.message);
         trackingLost = true;
       } finally {
         isTracking = false;
+      }
+    }
+
+    function maybeAutoPauseForUncertainty() {
+      if (awaitingSelection) return; // already paused/redrawing — don't double-trigger
+      if (missedTrackingCount >= MAX_MISSED_TRACKING || consecutiveNoPoseFrames >= MAX_NO_POSE_FRAMES) {
+        missedTrackingCount = 0;
+        consecutiveNoPoseFrames = 0;
+        beginRedraw('auto');
       }
     }
 
@@ -826,9 +861,10 @@
     }
 
     function setControlsEnabled(enabled) {
-      playPauseBtn.disabled = !enabled;
-      restartBtn.disabled   = !enabled;
-      seekBar.disabled      = !enabled;
+      playPauseBtn.disabled  = !enabled;
+      restartBtn.disabled    = !enabled;
+      seekBar.disabled       = !enabled;
+      redrawCropBtn.disabled = !enabled;
     }
 
     function drawPersonSelectionOverlay() {
@@ -887,10 +923,53 @@
       statusText.textContent = message;
       playPauseBtn.textContent = 'Pause';
       trackingLost = false;
+      missedTrackingCount = 0;
+      consecutiveNoPoseFrames = 0;
       lastTrackTime = performance.now();
       video.play().catch(() => {});
       if (!rafId) renderFrame();
     }
+
+    // Fire-and-forget: silently logs a correction event to the backend for future improvement.
+    // Never blocks the UI and never surfaces errors to the user.
+    function logCorrection(previousBox, newBox, trigger) {
+      fetch('/api/log-correction', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          frameTime: video.currentTime,
+          previousBox,
+          newBox,
+          trigger, // 'user' | 'auto'
+        }),
+      }).catch(err => console.error('Correction log failed (non-blocking):', err.message));
+    }
+
+    // Pause and enter manual-drag mode from whatever frame is currently showing, for either a
+    // user-initiated redraw or an automatic pause triggered by tracking uncertainty.
+    function beginRedraw(trigger) {
+      if (awaitingSelection) return; // already mid-selection/redraw — don't double-trigger
+      video.pause();
+      playPauseBtn.textContent = 'Play';
+      previousBoxForLog = cropRect;
+      redrawActive = true;
+      redrawTrigger = trigger;
+      detectedBoxes = [];
+      manualCropMode = true;
+      awaitingSelection = true;
+      canvas.classList.add('awaiting-selection');
+      setControlsEnabled(false);
+      selectionControls.style.display = 'none';
+      statusText.textContent = trigger === 'auto'
+        ? 'Tracking uncertain — please redraw the box around the athlete you want to analyze'
+        : 'Drag a new box around the athlete you want to track';
+      drawPersonSelectionOverlay();
+    }
+
+    redrawCropBtn.addEventListener('click', () => {
+      if (!video.src || redrawCropBtn.disabled) return;
+      beginRedraw('user');
+    });
 
     function selectPerson(box) {
       exitSelectionMode();
@@ -995,7 +1074,17 @@
         drawPersonSelectionOverlay();
         return;
       }
-      selectPerson({ x, y, width, height, index: 'manual' });
+      const newBox = { x, y, width, height, index: 'manual' };
+      if (redrawActive) {
+        logCorrection(previousBoxForLog, newBox, redrawTrigger);
+        redrawActive = false;
+        redrawTrigger = null;
+        exitSelectionMode();
+        cropRect = computeCropRect(newBox);
+        beginTrackedPlayback('Tracking resumed — analyzing…');
+      } else {
+        selectPerson(newBox);
+      }
     });
 
     drawCropBtn.addEventListener('click', () => {
@@ -1050,6 +1139,10 @@
       isTracking = false;
       trackingLost = false;
       trackingBadge.textContent = '';
+      missedTrackingCount = 0;
+      consecutiveNoPoseFrames = 0;
+      redrawActive = false;
+      redrawTrigger = null;
       detectionTriggered = false;
       exitSelectionMode();
       setControlsEnabled(true);
