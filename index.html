@@ -42,7 +42,7 @@
     }
     .mode-selector {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(2, 1fr);
       gap: 6px;
       background: #16161e;
       border: 1px solid #22222e;
@@ -198,8 +198,14 @@
       text-transform: uppercase;
     }
     .analysis-mode-badge.drill   { background: rgba(79,124,255,0.15); color: #7b9fff; border: 1px solid rgba(79,124,255,0.3); }
-    .analysis-mode-badge.movement { background: rgba(34,197,94,0.12); color: #5edb8a; border: 1px solid rgba(34,197,94,0.25); }
     .analysis-mode-badge.injury  { background: rgba(34,211,238,0.12); color: #67e8f9; border: 1px solid rgba(34,211,238,0.28); }
+
+    /* ── Drill mode: simple video preview, no tracking/skeleton UI ── */
+    #videoWrap.drill-mode #selectionControls,
+    #videoWrap.drill-mode #redrawCropBtn,
+    #videoWrap.drill-mode .toggle-label {
+      display: none !important;
+    }
 
     .context-row {
       display: flex;
@@ -494,7 +500,7 @@
 
   <header>
     <h1>The Movement AI</h1>
-    <p>MediaPipe pose detection · Claude Opus analysis · Yearby / Ecological Dynamics framework</p>
+    <p>Claude Opus analysis · Yearby / Ecological Dynamics framework</p>
   </header>
 
   <!-- Mode selector -->
@@ -504,12 +510,7 @@
       <button class="mode-btn active" data-mode="drill" id="modeDrillBtn">
         <span class="mode-btn-icon">📋</span>
         <span class="mode-btn-title">Drill Analysis</span>
-        <span class="mode-btn-desc">Score drill against the Alive Movement Problem Checklist · flag dead drills · suggest constraint manipulations</span>
-      </button>
-      <button class="mode-btn" data-mode="movement" id="modeMovementBtn">
-        <span class="mode-btn-icon">🏃</span>
-        <span class="mode-btn-title">Movement Analysis</span>
-        <span class="mode-btn-desc">Evaluate athlete's movement solution · identify constraints · flag compensation patterns</span>
+        <span class="mode-btn-desc">Watches the drill footage directly · scores against the Alive Movement Problem Checklist · flags dead drills · suggests constraint manipulations</span>
       </button>
       <button class="mode-btn" data-mode="injury" id="modeInjuryBtn">
         <span class="mode-btn-icon">🩹</span>
@@ -537,7 +538,6 @@
     <video id="video" playsinline></video>
     <canvas id="outputCanvas"></canvas>
     <div class="controls" id="selectionControls" style="display:none;">
-      <button class="btn-ghost" id="drawCropBtn">✏️ Draw crop box</button>
       <button class="btn-ghost" id="useFullFrameBtn">Analyze full frame</button>
     </div>
     <div class="seek-row">
@@ -587,7 +587,6 @@
 
     /* === Mode selector === */
     const modeDrillBtn     = document.getElementById('modeDrillBtn');
-    const modeMovementBtn  = document.getElementById('modeMovementBtn');
     const modeInjuryBtn    = document.getElementById('modeInjuryBtn');
     const analysisTitle    = document.getElementById('analysisTitle');
     const analysisModeBadge = document.getElementById('analysisModeBadge');
@@ -599,11 +598,6 @@
         badge: '📋 Drill',
         placeholder: 'Describe the drill (optional) — e.g., pass-rush 1v1, defensive end stance & start, WR route running on air…',
       },
-      movement: {
-        title: 'Movement Analysis',
-        badge: '🏃 Movement',
-        placeholder: 'Describe the athlete / movement (optional) — e.g., defensive end, rep 3 of pass rush set, fatigued late in practice…',
-      },
       injury: {
         title: 'Injury Prevention',
         badge: '🩹 Injury Prevention',
@@ -611,10 +605,14 @@
       },
     };
 
+    // Switching modes after a video is already loaded resets back to the upload screen rather than
+    // leaving the mode buttons in a dead-end disabled state — the two modes now use completely
+    // different pipelines (frame-sampling vs. MediaPipe tracking), so there's no safe way to carry
+    // an in-progress video across a mode switch.
     function setMode(mode) {
+      if (video.src && mode !== currentMode) resetToUploadState();
       currentMode = mode;
       modeDrillBtn.classList.toggle('active', mode === 'drill');
-      modeMovementBtn.classList.toggle('active', mode === 'movement');
       modeInjuryBtn.classList.toggle('active', mode === 'injury');
       movementContextInput.placeholder = MODE_META[mode].placeholder;
       analysisTitle.textContent = MODE_META[mode].title;
@@ -623,7 +621,6 @@
     }
 
     modeDrillBtn.addEventListener('click', () => setMode('drill'));
-    modeMovementBtn.addEventListener('click', () => setMode('movement'));
     modeInjuryBtn.addEventListener('click', () => setMode('injury'));
 
     /* === DOM refs === */
@@ -649,7 +646,6 @@
     const reportSection   = document.getElementById('reportSection');
     const analyzeBtn      = document.getElementById('analyzeBtn');
     const selectionControls = document.getElementById('selectionControls');
-    const drawCropBtn     = document.getElementById('drawCropBtn');
     const useFullFrameBtn = document.getElementById('useFullFrameBtn');
 
     /* === MediaPipe === */
@@ -805,45 +801,51 @@
       }
     }
 
+    // Drill mode just mirrors the video onto the canvas for preview (no ML calls at all — frame
+    // sampling happens on demand when Analyze is clicked). Injury mode keeps the full MediaPipe
+    // pose + person-tracking pipeline, unchanged from prior sessions.
     function renderFrame() {
       const W = video.videoWidth  || 640;
       const H = video.videoHeight || 360;
       if (canvas.width  !== W) canvas.width  = W;
       if (canvas.height !== H) canvas.height = H;
       ctx.clearRect(0, 0, W, H);
-      if (showVideoChk.checked) {
+      if (currentMode !== 'injury' || showVideoChk.checked) {
         ctx.drawImage(video, 0, 0, W, H);
       } else {
         ctx.fillStyle = '#111';
         ctx.fillRect(0, 0, W, H);
       }
-      if (cropRect) {
-        ctx.strokeStyle = trackingLost ? 'rgba(245,158,11,0.7)' : 'rgba(34,197,94,0.5)';
-        ctx.lineWidth = Math.max(1, W * 0.002);
-        ctx.strokeRect(cropRect.x, cropRect.y, cropRect.width, cropRect.height);
-      }
-      if (showSkeletonChk.checked && lastResults?.poseLandmarks) {
-        const drawLm = cropRect ? remapLandmarksToCanvas(lastResults.poseLandmarks, cropRect, W, H) : lastResults.poseLandmarks;
-        drawConnectors(ctx, drawLm, POSE_CONNECTIONS, { color: '#00E5FF', lineWidth: 2 });
-        drawLandmarks(ctx, drawLm, { color: '#FF5722', fillColor: '#FF572280', lineWidth: 1, radius: 4 });
-      }
-      trackingBadge.textContent = trackingLost ? '⚠ tracking uncertain' : '';
-      if (!isProcessing && !video.paused && !video.ended) {
-        isProcessing = true;
+
+      if (currentMode === 'injury') {
         if (cropRect) {
-          cropCanvas.width  = cropRect.width;
-          cropCanvas.height = cropRect.height;
-          cropCtx.drawImage(video, cropRect.x, cropRect.y, cropRect.width, cropRect.height, 0, 0, cropRect.width, cropRect.height);
-          pose.send({ image: cropCanvas });
-        } else {
-          pose.send({ image: video });
+          ctx.strokeStyle = trackingLost ? 'rgba(245,158,11,0.7)' : 'rgba(34,197,94,0.5)';
+          ctx.lineWidth = Math.max(1, W * 0.002);
+          ctx.strokeRect(cropRect.x, cropRect.y, cropRect.width, cropRect.height);
         }
-      }
-      if (cropRect && !awaitingSelection && !video.paused && !video.ended) {
-        const now = performance.now();
-        if (now - lastTrackTime > TRACK_INTERVAL_MS) {
-          lastTrackTime = now;
-          updateTracking(); // fire-and-forget — must not block the render loop
+        if (showSkeletonChk.checked && lastResults?.poseLandmarks) {
+          const drawLm = cropRect ? remapLandmarksToCanvas(lastResults.poseLandmarks, cropRect, W, H) : lastResults.poseLandmarks;
+          drawConnectors(ctx, drawLm, POSE_CONNECTIONS, { color: '#00E5FF', lineWidth: 2 });
+          drawLandmarks(ctx, drawLm, { color: '#FF5722', fillColor: '#FF572280', lineWidth: 1, radius: 4 });
+        }
+        trackingBadge.textContent = trackingLost ? '⚠ tracking uncertain' : '';
+        if (!isProcessing && !video.paused && !video.ended) {
+          isProcessing = true;
+          if (cropRect) {
+            cropCanvas.width  = cropRect.width;
+            cropCanvas.height = cropRect.height;
+            cropCtx.drawImage(video, cropRect.x, cropRect.y, cropRect.width, cropRect.height, 0, 0, cropRect.width, cropRect.height);
+            pose.send({ image: cropCanvas });
+          } else {
+            pose.send({ image: video });
+          }
+        }
+        if (cropRect && !awaitingSelection && !video.paused && !video.ended) {
+          const now = performance.now();
+          if (now - lastTrackTime > TRACK_INTERVAL_MS) {
+            lastTrackTime = now;
+            updateTracking(); // fire-and-forget — must not block the render loop
+          }
         }
       }
       rafId = requestAnimationFrame(renderFrame);
@@ -914,7 +916,6 @@
       dragCurrent = null;
       canvas.classList.remove('awaiting-selection');
       selectionControls.style.display = 'none';
-      drawCropBtn.textContent = '✏️ Draw crop box';
     }
 
     function beginTrackedPlayback(message = 'Processing video…') {
@@ -1029,9 +1030,9 @@
       if (detectedBoxes.length === 1) {
         selectPerson(detectedBoxes[0]);
       } else if (detectedBoxes.length === 0) {
-        enterSelectionMode('No people detected automatically — draw a crop box around the athlete, or analyze the full frame');
+        enterSelectionMode('No people detected automatically — click "Analyze full frame" to continue, or try a clearer clip');
       } else {
-        enterSelectionMode(`${detectedBoxes.length} people detected — click the athlete you want to analyze, or draw a crop box`);
+        enterSelectionMode(`${detectedBoxes.length} people detected — click the athlete you want to analyze`);
       }
     }
 
@@ -1049,6 +1050,9 @@
       if (box) selectPerson(box);
     });
 
+    // mousedown/mousemove/mouseup below are the shared drag mechanism used by "Redraw crop box"
+    // (manualCropMode is only ever set true by beginRedraw() now — there is no longer a button to
+    // enter free-drag mode during the initial person-selection step, only click-to-select there).
     canvas.addEventListener('mousedown', e => {
       if (!awaitingSelection || !manualCropMode) return;
       dragStart = canvasEventToVideoCoords(e);
@@ -1087,17 +1091,6 @@
       }
     });
 
-    drawCropBtn.addEventListener('click', () => {
-      manualCropMode = !manualCropMode;
-      drawCropBtn.textContent = manualCropMode ? '✕ Cancel crop box' : '✏️ Draw crop box';
-      statusText.textContent = manualCropMode
-        ? 'Drag a box around the athlete you want to analyze'
-        : (detectedBoxes.length
-            ? `${detectedBoxes.length} people detected — click the athlete you want to analyze, or draw a crop box`
-            : 'No people detected automatically — draw a crop box around the athlete, or analyze the full frame');
-      drawPersonSelectionOverlay();
-    });
-
     useFullFrameBtn.addEventListener('click', () => {
       exitSelectionMode();
       cropRect = null;
@@ -1111,13 +1104,25 @@
       videoWrap.classList.add('visible');
       video.playbackRate = parseFloat(speedSelect.value);
       statusDot.className = 'dot active';
-      statusText.textContent = 'Loading video frame…';
+      statusText.textContent = currentMode === 'injury' ? 'Loading video frame…' : 'Loading video…';
     });
 
-    video.addEventListener('loadeddata', () => {
+    video.addEventListener('loadeddata', async () => {
       if (detectionTriggered) return;
       detectionTriggered = true;
-      runPersonDetection();
+      if (currentMode === 'injury') {
+        runPersonDetection();
+      } else {
+        // Drill mode needs no person detection or tracking at all — just force one real decode
+        // cycle so the canvas preview shows an actual frame, then leave the video paused. Frames
+        // for analysis are sampled on demand when the user clicks Analyze.
+        try { await video.play(); video.pause(); } catch (err) { /* ignore */ }
+        await drawPaintableFrame();
+        if (!rafId) renderFrame();
+        statusDot.className = 'dot ready';
+        statusText.textContent = 'Video loaded — add context and click Analyze';
+        playPauseBtn.textContent = 'Play';
+      }
     });
 
     video.addEventListener('ended', () => {
@@ -1130,10 +1135,44 @@
     /* === File upload === */
     function loadVideo(file) {
       if (!file?.type.startsWith('video/')) return;
-      resetAngleData();
-      lastResults = null;
       reportSection.innerHTML = '';
       analysisSection.style.display = 'flex';
+      detectionTriggered = false;
+      videoWrap.classList.toggle('drill-mode', currentMode === 'drill');
+
+      if (currentMode === 'injury') {
+        resetAngleData();
+        lastResults = null;
+        detectedBoxes = [];
+        cropRect = null;
+        isTracking = false;
+        trackingLost = false;
+        trackingBadge.textContent = '';
+        missedTrackingCount = 0;
+        consecutiveNoPoseFrames = 0;
+        redrawActive = false;
+        redrawTrigger = null;
+        exitSelectionMode();
+        setControlsEnabled(true);
+      } else {
+        trackingBadge.textContent = '';
+        setControlsEnabled(true);
+      }
+
+      video.src = URL.createObjectURL(file);
+    }
+
+    // Full reset back to the pre-upload screen — used when switching modes after a video is
+    // already loaded, since drill and injury use entirely different pipelines.
+    function resetToUploadState() {
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+      videoWrap.classList.remove('visible');
+      videoWrap.classList.remove('drill-mode');
+      analysisSection.style.display = 'none';
+      reportSection.innerHTML = '';
+      exitSelectionMode();
       detectedBoxes = [];
       cropRect = null;
       isTracking = false;
@@ -1144,9 +1183,10 @@
       redrawActive = false;
       redrawTrigger = null;
       detectionTriggered = false;
-      exitSelectionMode();
-      setControlsEnabled(true);
-      video.src = URL.createObjectURL(file);
+      resetAngleData();
+      lastResults = null;
+      statusDot.className = 'dot ready';
+      statusText.textContent = 'Models ready — select a mode and upload a video';
     }
 
     uploadArea.addEventListener('click', () => fileInput.click());
@@ -1165,7 +1205,7 @@
         video.play().catch(() => {});
         playPauseBtn.textContent = 'Pause';
         statusDot.className = 'dot active';
-        statusText.textContent = 'Processing video…';
+        statusText.textContent = currentMode === 'injury' ? 'Processing video…' : 'Playing…';
         if (!rafId) renderFrame();
       } else {
         video.pause();
@@ -1175,16 +1215,20 @@
 
     restartBtn.addEventListener('click', () => {
       if (!video.src) return;
-      resetAngleData();
-      lastResults = null;
       reportSection.innerHTML = '';
-      trackingLost = false;
-      lastTrackTime = performance.now();
       video.currentTime = 0;
-      video.play().catch(() => {});
       playPauseBtn.textContent = 'Pause';
       statusDot.className = 'dot active';
-      statusText.textContent = 'Processing video…';
+      if (currentMode === 'injury') {
+        resetAngleData();
+        lastResults = null;
+        trackingLost = false;
+        lastTrackTime = performance.now();
+        statusText.textContent = 'Processing video…';
+      } else {
+        statusText.textContent = 'Playing…';
+      }
+      video.play().catch(() => {});
       if (!rafId) renderFrame();
     });
 
@@ -1251,19 +1295,18 @@
       return { min: min.toFixed(1), max: max.toFixed(1), avg: (sum / arr.length).toFixed(1) };
     }
 
-    /* === Claude API call === */
-    async function analyzeMovement() {
+    /* === Injury Prevention: unchanged from prior sessions (MediaPipe joint-angle data) === */
+    async function runInjuryAnalysis() {
       const totalFrames = Math.max(...Object.values(angleData).map(a => a.length));
       if (totalFrames < 5) {
         reportSection.innerHTML = '<p class="report-error">Not enough pose data collected. Ensure the athlete is clearly visible throughout the video.</p>';
         return;
       }
 
-      const modeLabel = MODE_META[currentMode].title;
       reportSection.innerHTML = `
         <div class="analyzing">
           <div class="analyzing-spinner"></div>
-          Running ${modeLabel} with Claude Opus…
+          Running Injury Prevention with Claude Opus…
         </div>`;
 
       try {
@@ -1271,7 +1314,7 @@
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            mode: currentMode,
+            mode: 'injury',
             duration: video.duration ? `${video.duration.toFixed(1)}s` : 'unknown',
             totalFrames,
             context: movementContextInput.value.trim(),
@@ -1288,16 +1331,116 @@
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
         if (!data.analysis) throw new Error('Empty response from Claude');
-        renderReport(data.analysis, data.mode || currentMode);
+        renderReport(data.analysis, data.mode || 'injury');
       } catch (err) {
         reportSection.innerHTML = `<div class="report-error">Analysis failed: ${esc(err.message)}</div>`;
+      }
+    }
+
+    /* === Drill Analysis: video-frame-based (multimodal), no pose data needed === */
+    const frameCanvas = document.createElement('canvas');
+    const frameCtx    = frameCanvas.getContext('2d');
+    const DRILL_FRAME_COUNT   = 10;
+    const DRILL_FRAME_MAX_DIM = 640;
+    const DRILL_FRAME_QUALITY = 0.6;
+
+    function captureFrameToDataUrl() {
+      const w = video.videoWidth, h = video.videoHeight;
+      const scale = Math.min(1, DRILL_FRAME_MAX_DIM / Math.max(w, h));
+      const cw = Math.max(1, Math.round(w * scale)), ch = Math.max(1, Math.round(h * scale));
+      frameCanvas.width = cw; frameCanvas.height = ch;
+      frameCtx.drawImage(video, 0, 0, cw, ch);
+      return frameCanvas.toDataURL('image/jpeg', DRILL_FRAME_QUALITY);
+    }
+
+    function captureFrameAt(t) {
+      return new Promise(resolve => {
+        const onSeeked = () => {
+          video.removeEventListener('seeked', onSeeked);
+          resolve(captureFrameToDataUrl());
+        };
+        video.addEventListener('seeked', onSeeked);
+        video.currentTime = t;
+      });
+    }
+
+    async function sampleDrillFrames(count = DRILL_FRAME_COUNT) {
+      const dur = video.duration;
+      if (!dur || !isFinite(dur) || dur <= 0) {
+        // Duration unknown/invalid (rare edge case) — fall back to whatever frame is showing now.
+        return [captureFrameToDataUrl()];
+      }
+      const margin = Math.min(0.15, dur * 0.05);
+      const start = margin;
+      const end = Math.max(margin, dur - margin);
+      const frames = [];
+      for (let i = 0; i < count; i++) {
+        const t = count === 1 ? (start + end) / 2 : start + (end - start) * (i / (count - 1));
+        frames.push(await captureFrameAt(t));
+      }
+      return frames;
+    }
+
+    async function runDrillAnalysis() {
+      if (!video.src || !video.videoWidth) {
+        reportSection.innerHTML = '<p class="report-error">No video loaded.</p>';
+        return;
+      }
+
+      video.pause();
+      playPauseBtn.textContent = 'Play';
+      reportSection.innerHTML = `
+        <div class="analyzing">
+          <div class="analyzing-spinner"></div>
+          Sampling video frames…
+        </div>`;
+
+      let frames;
+      try {
+        frames = await sampleDrillFrames();
+      } catch (err) {
+        reportSection.innerHTML = `<div class="report-error">Failed to sample video frames: ${esc(err.message)}</div>`;
+        return;
+      }
+
+      reportSection.innerHTML = `
+        <div class="analyzing">
+          <div class="analyzing-spinner"></div>
+          Running Drill Analysis with Claude Opus…
+        </div>`;
+
+      try {
+        const res = await fetch('/api/analyze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            mode: 'drill',
+            duration: video.duration ? `${video.duration.toFixed(1)}s` : 'unknown',
+            context: movementContextInput.value.trim(),
+            frames,
+          }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        if (!data.analysis) throw new Error('Empty response from Claude');
+        renderReport(data.analysis, data.mode || 'drill');
+      } catch (err) {
+        reportSection.innerHTML = `<div class="report-error">Analysis failed: ${esc(err.message)}</div>`;
+      } finally {
+        video.currentTime = 0;
+        if (!rafId) renderFrame();
       }
     }
 
     analyzeBtn.addEventListener('click', async () => {
       analyzeBtn.disabled = true;
       try {
-        await analyzeMovement();
+        if (currentMode === 'injury') {
+          await runInjuryAnalysis();
+        } else {
+          await runDrillAnalysis();
+        }
       } finally {
         analyzeBtn.disabled = false;
       }
