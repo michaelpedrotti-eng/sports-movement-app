@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import { fileURLToPath } from 'url';
-import { dirname } from 'path';
+import { dirname, join } from 'path';
 import { runAnalysis } from './lib/analysis.js';
 import { appendCorrectionLog } from './lib/logCorrection.js';
 
@@ -13,6 +13,10 @@ const app = express();
 // Vercel's 4.5MB platform request-size ceiling in production, but comfortably above Express's
 // default 100kb JSON limit, so it needs raising here for local dev parity.
 app.use(express.json({ limit: '15mb' }));
+// Vercel's build flattens public/ contents to the site root (public/mvmnt-logo.png deploys to
+// /mvmnt-logo.png, not /public/mvmnt-logo.png) — mount public/ at root here too so local dev
+// resolves the same path as production.
+app.use(express.static(join(__dirname, 'public')));
 app.use(express.static(__dirname));
 
 app.post('/api/analyze', async (req, res) => {
